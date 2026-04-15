@@ -85,8 +85,8 @@ mysql -u root -p linkedin_simulation < schema.sql
 If you already have a MongoDB container:
 
 ```bash
-docker start yelp-mongo
-docker port yelp-mongo
+docker start mongo
+docker port mongo
 ```
 
 Make sure the port mapping shows `27017`.
@@ -154,5 +154,5 @@ To stop the backend:
 
 To stop MongoDB container:
 ```bash
-docker stop yelp-mongo
+docker stop mongo
 ```
