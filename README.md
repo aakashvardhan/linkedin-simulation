@@ -93,7 +93,7 @@ Make sure the port mapping shows `27017`.
 
 ### Option B: Run a new MongoDB container
 ```bash
-docker run -d --name yelp-mongo -p 27017:27017 mongo:7
+docker run -d --name -mongo -p 27017:27017 mongo:7
 ```
 
 ## 9. Start the Backend
