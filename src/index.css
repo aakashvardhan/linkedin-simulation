@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  --color-linkedin: #0a66c2;
+  --color-linkedin-dark: #004182;
+  --color-linkedin-light: #e8f0fe;
+  --color-linkedin-bg: #f3f2ef;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
