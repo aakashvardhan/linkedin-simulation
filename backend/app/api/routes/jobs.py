@@ -318,10 +318,10 @@ def saved_by_member(payload: JobsSavedByMemberRequest, db: Session = Depends(get
             'jobs': [
                 {
                     'job_id': row.job_id,
-                    'title': db.query(JobPosting).filter(JobPosting.job_id == row.job_id).first().title,
-                    'company_name': db.query(JobPosting).filter(JobPosting.job_id == row.job_id).first().company.name,
-                    'location': db.query(JobPosting).filter(JobPosting.job_id == row.job_id).first().location,
-                    'posted_datetime': db.query(JobPosting).filter(JobPosting.job_id == row.job_id).first().posted_datetime,
+                    'title': row.job.title,
+                    'company_name': row.job.company.name if row.job.company else None,
+                    'location': row.job.location,
+                    'posted_datetime': row.job.posted_datetime,
                     'saved_at': row.saved_at,
                 }
                 for row in rows
