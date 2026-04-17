@@ -76,7 +76,8 @@ def create_job(
     recruiter = db.query(Recruiter).filter(Recruiter.recruiter_id == payload.recruiter_id).first()
     if not company or not recruiter:
         raise HTTPException(status_code=404, detail='Recruiter or company not found')
-
+    if payload.salary_min and payload.salary_max and payload.salary_min > payload.salary_max:
+        raise HTTPException(status_code=400, detail='salary_min cannot be greater than salary_max')
     job = JobPosting(
         company_id=payload.company_id,
         recruiter_id=payload.recruiter_id,
