@@ -1,0 +1,47 @@
+export const mockRecruiterDashboard = {
+  stats: {
+    totalJobs: 8,
+    totalApplicants: 156,
+    interviewsScheduled: 12,
+    offersExtended: 3,
+  },
+  topJobsByApplicants: [
+    { job: 'Sr. Software Engineer', applicants: 45 },
+    { job: 'Frontend Developer', applicants: 38 },
+    { job: 'Data Scientist', applicants: 32 },
+    { job: 'DevOps Engineer', applicants: 28 },
+    { job: 'Product Manager', applicants: 25 },
+    { job: 'UX Designer', applicants: 20 },
+    { job: 'Backend Engineer', applicants: 18 },
+    { job: 'ML Engineer', applicants: 15 },
+    { job: 'QA Engineer', applicants: 12 },
+    { job: 'Tech Lead', applicants: 10 },
+  ],
+  cityDistribution: [
+    { city: 'San Francisco', count: 42 },
+    { city: 'New York', count: 35 },
+    { city: 'Seattle', count: 28 },
+    { city: 'Austin', count: 22 },
+    { city: 'Chicago', count: 15 },
+    { city: 'Remote', count: 14 },
+  ],
+  lowTractionJobs: [
+    { job: 'QA Engineer', applicants: 3 },
+    { job: 'Technical Writer', applicants: 2 },
+    { job: 'IT Support', applicants: 1 },
+  ],
+  clicksPerJob: [
+    { job: 'Sr. Software Engineer', clicks: 320 },
+    { job: 'Frontend Developer', clicks: 280 },
+    { job: 'Data Scientist', clicks: 250 },
+    { job: 'DevOps Engineer', clicks: 190 },
+    { job: 'Product Manager', clicks: 175 },
+    { job: 'UX Designer', clicks: 160 },
+  ],
+  savedJobsWeekly: [
+    { week: 'Week 1', saves: 12 }, { week: 'Week 2', saves: 18 },
+    { week: 'Week 3', saves: 25 }, { week: 'Week 4', saves: 22 },
+    { week: 'Week 5', saves: 30 }, { week: 'Week 6', saves: 35 },
+    { week: 'Week 7', saves: 28 }, { week: 'Week 8', saves: 40 },
+  ],
+};
