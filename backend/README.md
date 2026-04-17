@@ -1,4 +1,4 @@
-# LinkedIn Simulation M3/M4 Backend
+# LinkedIn Simulation M3/M4 Backend, Refer IntegrationReadme for frontend-Backend integration by Vedika.
 
 Updated FastAPI backend aligned to the **Group3 API document** for the M3/M4-owned scope and the shared **Database Schema Reference**.
 
