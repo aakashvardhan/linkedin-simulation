@@ -21,7 +21,7 @@ from app.schemas.member import (
     RecruiterGetRequest,
     RecruiterLoginRequest,
 )
-
+from app.core.redis import cache_delete, cache_get, cache_set
 router = APIRouter()
 
 
@@ -139,11 +139,17 @@ def create_member(payload: MemberCreateRequest, db: Session = Depends(get_db)):
 
 @router.post('/members/get')
 def get_member(payload: MemberGetRequest, db: Session = Depends(get_db)):
+    cache_key = f'member:{payload.member_id}'
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     member = _member_query(db).filter(Member.member_id == payload.member_id).first()
     if not member:
         raise HTTPException(status_code=404, detail='Member not found')
-    return success_response(_member_data(member))
-
+    response = success_response(_member_data(member))
+    cache_set(cache_key, response, ttl=300)
+    return response
 
 @router.post('/members/update')
 def update_member(
@@ -193,6 +199,7 @@ def update_member(
         db.rollback()
         raise HTTPException(status_code=409, detail='A member with this email already exists') from exc
     db.refresh(member)
+    cache_delete(f'member:{payload.member_id}')
     return success_response(
         {
             'member_id': member.member_id,
@@ -216,6 +223,7 @@ def delete_member(
         raise HTTPException(status_code=404, detail='Member not found')
     db.delete(member)
     db.commit()
+    cache_delete(f'member:{payload.member_id}')
     return success_response({'member_id': payload.member_id, 'deleted': True})
 
 

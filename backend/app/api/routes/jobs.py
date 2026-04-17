@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import get_current_user, get_db
 from app.core.kafka import publisher
+from app.core.redis import cache_delete, cache_delete_pattern, cache_get, cache_set
 from app.core.responses import success_response
 from app.models.company import Company
 from app.models.job import JobPosting
@@ -93,6 +94,10 @@ def create_job(
     db.add(job)
     db.commit()
     db.refresh(job)
+
+    # Invalidate search cache since a new job was added
+    cache_delete_pattern('jobs:search:*')
+
     return success_response(
         {
             'job_id': job.job_id,
@@ -107,6 +112,11 @@ def create_job(
 
 @router.post('/jobs/get')
 def get_job(payload: JobGetRequest, db: Session = Depends(get_db)):
+    cache_key = f'job:{payload.job_id}'
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     job = db.query(JobPosting).join(Company).join(Recruiter).filter(JobPosting.job_id == payload.job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail='Job not found')
@@ -121,7 +131,10 @@ def get_job(payload: JobGetRequest, db: Session = Depends(get_db)):
         entity_id=str(job.job_id),
         payload={'job_id': job.job_id},
     )
-    return success_response(_job_details(job))
+
+    response = success_response(_job_details(job))
+    cache_set(cache_key, response, ttl=300)
+    return response
 
 
 @router.post('/jobs/update')
@@ -154,11 +167,25 @@ def update_job(
 
     db.commit()
     db.refresh(job)
+
+    # Invalidate this job's cache and search cache
+    cache_delete(f'job:{payload.job_id}')
+    cache_delete_pattern('jobs:search:*')
+
     return success_response({'job_id': job.job_id, 'updated_fields': updated_fields, 'updated_at': datetime.now(timezone.utc)})
 
 
 @router.post('/jobs/search')
 def search_jobs(payload: JobSearchRequest, db: Session = Depends(get_db)):
+    import hashlib
+    cache_key = 'jobs:search:' + hashlib.md5(
+        json.dumps(payload.model_dump(), sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     query = db.query(JobPosting).join(Company)
     if payload.keyword:
         term = f'%{payload.keyword}%'
@@ -186,7 +213,7 @@ def search_jobs(payload: JobSearchRequest, db: Session = Depends(get_db)):
     page_size = max(payload.page_size, 1)
     jobs = query.order_by(sort_expr).offset((page - 1) * page_size).limit(page_size).all()
 
-    return success_response(
+    response = success_response(
         {
             'jobs': [
                 {
@@ -211,6 +238,8 @@ def search_jobs(payload: JobSearchRequest, db: Session = Depends(get_db)):
             'total_pages': (total_count + page_size - 1) // page_size,
         }
     )
+    cache_set(cache_key, response, ttl=120)
+    return response
 
 
 @router.post('/jobs/close')
@@ -233,6 +262,11 @@ def close_job(
     job.status = 'closed'
     job.closed_at = datetime.now(timezone.utc)
     db.commit()
+
+    # Invalidate cache
+    cache_delete(f'job:{payload.job_id}')
+    cache_delete_pattern('jobs:search:*')
+
     return success_response({'job_id': job.job_id, 'status': job.status, 'closed_at': job.closed_at})
 
 
@@ -293,6 +327,10 @@ def save_job(
         db.rollback()
         raise HTTPException(status_code=409, detail='You have already saved this job') from exc
     db.refresh(saved)
+
+    # Invalidate job cache so saves_count updates
+    cache_delete(f'job:{payload.job_id}')
+
     publisher.publish(
         topic='job.saved',
         actor_id=str(payload.member_id),
