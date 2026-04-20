@@ -43,13 +43,16 @@ export default function JobDetail() {
   const isClosed = job.status === 'closed';
 
   const toggleSave = () => {
-    if (isSaved) {
-      setSavedJobs(savedJobs.filter((j) => j.id !== job.id));
-      toast.success('Removed from saved');
-    } else {
-      setSavedJobs([...savedJobs, job]);
-      toast.success('Job saved!');
-    }
+    setSavedJobs((prev) => {
+      const exists = prev.some((j) => j.id === job.id);
+      if (exists) {
+        toast.success('Removed from saved');
+        return prev.filter((j) => j.id !== job.id);
+      } else {
+        toast.success('Job saved!');
+        return [...prev, job];
+      }
+    });
   };
 
   const handleApplyClick = () => {

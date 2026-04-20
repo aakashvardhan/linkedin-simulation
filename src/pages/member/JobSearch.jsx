@@ -20,12 +20,12 @@ export default function JobSearch() {
 
   useEffect(() => {
     fetchJobs();
-  }, [page]);
+  }, [page, filters]);
 
   const fetchJobs = async (q = query) => {
     setLoading(true);
     try {
-      const result = await searchJobs(q, page);
+      const result = await searchJobs(q, page, filters);
       setJobs(result.jobs);
       setTotalPages(result.totalPages);
     } catch {
@@ -41,41 +41,38 @@ export default function JobSearch() {
     fetchJobs(q);
   };
 
-  const handleSave = (job) => {
-    const exists = savedJobs.some((j) => j.id === job.id);
-    if (exists) {
-      setSavedJobs(savedJobs.filter((j) => j.id !== job.id));
-      toast.success('Job removed from saved');
-    } else {
-      setSavedJobs([...savedJobs, job]);
-      toast.success('Job saved!');
-    }
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
+    setPage(1);
   };
 
-  const filteredJobs = jobs.filter((job) => {
-    if (filters.employmentType && job.employment_type !== filters.employmentType) return false;
-    if (filters.remote === 'remote' && !job.is_remote) return false;
-    if (filters.remote === 'onsite' && job.is_remote) return false;
-    if (filters.location && !job.location?.toLowerCase().includes(filters.location.toLowerCase())) return false;
-    if (filters.industry && job.industry && job.industry !== filters.industry) return false;
-    if (filters.seniority && job.seniority_level && job.seniority_level !== filters.seniority) return false;
-    return true;
-  });
+  const handleSave = (job) => {
+    setSavedJobs((prev) => {
+      const exists = prev.some((j) => j.id === job.id);
+      if (exists) {
+        toast.success('Job removed from saved');
+        return prev.filter((j) => j.id !== job.id);
+      } else {
+        toast.success('Job saved!');
+        return [...prev, job];
+      }
+    });
+  };
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-800 mb-6">Find Jobs</h1>
       <SearchBar onSearch={handleSearch} placeholder="Search by title, keyword, or company..." initialValue={query} />
       <div className="mt-4">
-        <JobFilters filters={filters} onChange={setFilters} />
+        <JobFilters filters={filters} onChange={handleFilterChange} />
       </div>
       {loading ? (
         <LoadingSpinner message="Searching jobs..." />
-      ) : filteredJobs.length === 0 ? (
+      ) : jobs.length === 0 ? (
         <EmptyState title="No jobs found" message="Try a different search query or adjust filters" />
       ) : (
         <div className="space-y-3 mt-4">
-          {filteredJobs.map((job) => (
+          {jobs.map((job) => (
             <JobCard
               key={job.id}
               job={job}
