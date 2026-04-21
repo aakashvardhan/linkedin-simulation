@@ -10,6 +10,7 @@ from app.agents.supervisor import run_hiring_workflow
 from app.api.websocket import push_update
 from app.config import settings
 from app.kafka.producer import publish_event
+from app.api.routes import _task_results
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ async def start_consumer() -> None:
             logger.info("Received event_type=%s trace_id=%s", event_type, trace_id)
 
             result = await run_hiring_workflow(event.get("payload", {}), trace_id)
-
+            _task_results[trace_id] = result
             await publish_event(
                 "ai.results",
                 {

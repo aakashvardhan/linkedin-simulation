@@ -33,6 +33,7 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
             }
         )
         logger.info("trace_id=%s step=resume_parser status=completed", trace_id)
+        logger.info("trace_id=%s resume_parsed=%s", trace_id, parsed_resume)
     except json.JSONDecodeError as e:
         logger.error("trace_id=%s step=resume_parser error=%s", trace_id, str(e))
         results["steps"].append(
@@ -72,6 +73,7 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
             trace_id,
             match.get("score"),
         )
+        logger.info("trace_id=%s match_scored=%s", trace_id, match)
     except Exception as e:
         logger.error("trace_id=%s step=job_matcher error=%s", trace_id, str(e))
         results["steps"].append(
@@ -98,6 +100,7 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
         logger.info(
             "trace_id=%s step=outreach_drafter status=awaiting_approval", trace_id
         )
+        logger.info("trace_id=%s outreach_draft=%s", trace_id, outreach)
     except Exception as e:
         logger.error("trace_id=%s step=outreach_drafter error=%s", trace_id, str(e))
         results["steps"].append(

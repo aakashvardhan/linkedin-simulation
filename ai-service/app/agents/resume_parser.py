@@ -1,17 +1,17 @@
 # Skill: extract structured fields from resume
 from openai import AsyncOpenAI
-
+import json
 from app.config import settings
 
 client = AsyncOpenAI(
-    api_key=settings.openrouter_api_key,
-    base_url=settings.openrouter_base_url,
+    api_key=settings.groq_api_key,
+    base_url=settings.groq_base_url,
 )
 
 
 async def parse_resume(resume_text: str) -> dict:
     response = await client.chat.completions.create(
-        model=settings.openrouter_model,
+        model=settings.groq_model,
         messages=[
             {
                 "role": "system",
@@ -37,6 +37,9 @@ async def parse_resume(resume_text: str) -> dict:
 
     raw = response.choices[0].message.content.strip()
 
-    import json  # noqa: PLC0415
+    # Strip markdown code fences if model wraps response
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1]).strip()
 
     return json.loads(raw)

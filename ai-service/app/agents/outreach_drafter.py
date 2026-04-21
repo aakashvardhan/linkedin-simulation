@@ -5,8 +5,8 @@ from openai import AsyncOpenAI
 from app.config import settings
 
 client = AsyncOpenAI(
-    api_key=settings.openrouter_api_key,
-    base_url=settings.openrouter_base_url,
+    api_key=settings.groq_api_key,
+    base_url=settings.groq_base_url,
 )
 
 
@@ -27,7 +27,7 @@ async def generate_outreach(job: dict, candidate: dict, match: dict) -> dict:
     )
 
     response = await client.chat.completions.create(
-        model=settings.openrouter_model,
+        model=settings.groq_model,
         messages=[
             {
                 "role": "system",

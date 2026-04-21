@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_task_results: dict = {}
 
 class AgentRequest(BaseModel):
     actor_id: str
@@ -103,3 +104,13 @@ async def get_status(trace_id: str) -> dict:
         "trace_id": trace_id,
         "message": "Connect to /ws/{trace_id} for real-time status updates",
     }
+
+@router.get("/result/{trace_id}")
+async def get_result(trace_id: str) -> dict:
+    result = _task_results.get(trace_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No result found for this trace_id",
+        )
+    return result
