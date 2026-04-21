@@ -8,12 +8,13 @@ agents or clients, and shapes the response. Long-running orchestration
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agents import career_coach, job_matcher, outreach_drafter, resume_parser
 from app.api.auth import Principal, get_principal, require_recruiter
@@ -47,10 +48,38 @@ router = APIRouter(prefix="/ai", tags=["candidate-ai"])
 # ---------------------------------------------------------------------------
 
 
+def _non_blank(value: str | None) -> str | None:
+    """Pydantic validator helper: coerce whitespace-only strings to an error.
+
+    Returns the stripped value on success; raises ValueError for None is
+    handled by the model's Optional annotation (callers can still pass
+    `None` when the field is optional).
+    """
+
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("must not be empty or whitespace")
+    return stripped
+
+
 class ParseResumeRequest(BaseModel):
     member_id: str
     resume_url: str | None = None
     resume_text: str | None = None
+
+    @field_validator("member_id")
+    @classmethod
+    def _member_id_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None  # required field
+        return result
+
+    @field_validator("resume_text", "resume_url")
+    @classmethod
+    def _optional_not_blank(cls, value: str | None) -> str | None:
+        return _non_blank(value)
 
 
 class ParseResumeResponse(BaseModel):
@@ -60,7 +89,7 @@ class ParseResumeResponse(BaseModel):
 
 
 class MatchFilters(BaseModel):
-    min_experience_years: int | None = None
+    min_experience_years: int | None = Field(default=None, ge=0)
     required_skills: list[str] | None = None
 
 
@@ -69,6 +98,13 @@ class MatchCandidatesRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     filters: MatchFilters | None = None
 
+    @field_validator("job_id")
+    @classmethod
+    def _job_id_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
+
 
 class OutreachDraftRequest(BaseModel):
     job_id: str
@@ -76,12 +112,26 @@ class OutreachDraftRequest(BaseModel):
     recruiter_id: str
     tone: str | None = Field(default="professional")
 
+    @field_validator("job_id", "member_id", "recruiter_id")
+    @classmethod
+    def _ids_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
+
 
 class HiringAssistantRequest(BaseModel):
     job_id: str
     recruiter_id: str
     top_k: int = Field(default=5, ge=1, le=50)
     generate_outreach: bool = False
+
+    @field_validator("job_id", "recruiter_id")
+    @classmethod
+    def _ids_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
 
 
 class ApproveOutreachRequest(BaseModel):
@@ -91,10 +141,31 @@ class ApproveOutreachRequest(BaseModel):
     action: ApprovalAction
     final_message: str | None = None
 
+    @field_validator("task_id", "recruiter_id", "candidate_id")
+    @classmethod
+    def _ids_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
+
+    @field_validator("final_message")
+    @classmethod
+    def _final_message_not_blank(cls, value: str | None) -> str | None:
+        # None is acceptable here; validators downstream decide whether
+        # `final_message` is required based on `action`.
+        return _non_blank(value)
+
 
 class CareerCoachRequest(BaseModel):
     member_id: str
     target_job_id: str
+
+    @field_validator("member_id", "target_job_id")
+    @classmethod
+    def _ids_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -150,12 +221,33 @@ async def parse_resume(
     resume_text = _resume_text_from_request(body)
     try:
         parsed = await resume_parser.parse_resume(resume_text)
+    except json.JSONDecodeError as e:
+        # The LLM returned something that wasn't valid JSON (prompt drift,
+        # truncation, etc.). Surface this distinctly so clients can retry.
+        logger.error("parse-resume JSON error member_id=%s: %s", body.member_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Resume parser returned invalid JSON; try again",
+        ) from e
     except Exception as e:
         logger.error("parse-resume failed member_id=%s error=%s", body.member_id, e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Resume parser failed",
         ) from e
+
+    if not isinstance(parsed, dict):
+        # Defensive: the parser contract says it returns a dict. If an LLM
+        # response happens to decode to a list or scalar, reject it clearly.
+        logger.error(
+            "parse-resume unexpected shape member_id=%s type=%s",
+            body.member_id,
+            type(parsed).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Resume parser returned unexpected shape",
+        )
 
     return ParseResumeResponse(
         member_id=body.member_id,
@@ -305,7 +397,19 @@ async def hiring_assistant(
         },
         idempotency_key=task_id,
     )
-    await publish_event(AI_REQUESTS_TOPIC, envelope.model_dump(mode="json"))
+
+    # If Kafka publish fails AFTER the task row was inserted, the task
+    # would never be picked up by the consumer. Roll the row forward to
+    # FAILED and surface a 502 so the caller can retry.
+    try:
+        await publish_event(AI_REQUESTS_TOPIC, envelope.model_dump(mode="json"))
+    except Exception as e:
+        logger.error("Kafka publish failed for task_id=%s: %s", task_id, e)
+        await task_store.update_status(task_id, TaskStatus.FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to enqueue task; please retry",
+        ) from e
 
     return {
         "task_id": task_id,
@@ -352,6 +456,14 @@ async def get_task(
 # ---------------------------------------------------------------------------
 
 
+def _is_duplicate_approval(existing: dict[str, Any] | None, candidate_id: str) -> bool:
+    """True iff `existing` already records a decision for this candidate."""
+
+    if not existing:
+        return False
+    return existing.get("candidate_id") == candidate_id
+
+
 @router.post("/approve-outreach")
 async def approve_outreach(
     body: ApproveOutreachRequest,
@@ -364,6 +476,19 @@ async def approve_outreach(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Recruiter does not own this task",
+        )
+    if task.status != TaskStatus.AWAITING_APPROVAL:
+        # Approval is only meaningful while the task is waiting for HITL.
+        # Reject with 409 Conflict rather than 400 so clients can
+        # distinguish bad input from wrong-state.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task is in status '{task.status.value}'; cannot record approval",
+        )
+    if _is_duplicate_approval(task.approval, body.candidate_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval already recorded for this candidate",
         )
 
     approval: dict[str, Any] = {

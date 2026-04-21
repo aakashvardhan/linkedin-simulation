@@ -194,8 +194,18 @@ Running log of what is already implemented on `feature/candidate-ai-service`, wh
 - `app/db/mongo.py`: real Motor client with cached `AsyncIOMotorClient`, `get_ai_tasks_collection`, `close_client`.
 - `app/db/task_store.py`: CRUD + idempotency lookup (`get_task_by_idempotency_key`), `append_step`, `set_result`, `record_approval`, `mark_step_failed`.
 - `app/kafka/schemas.py`: re-export of `KafkaEnvelope` + typed `AIEventType` / `AIEntityType` / topic constants.
-- `app/clients/`: `profile_client`, `job_client`, `messaging_client`, shared `errors.py` with `ServiceError` + `translate_service_error`.
+- `app/clients/`: `profile_client`, `job_client`, `messaging_client`, shared `errors.py` with `ServiceError` + `translate_service_error` + `wrap_http_errors` decorator.
 - `.env.example` with placeholders (no real secrets).
+- Edge-case hardening pass (see below).
+
+### Edge cases hardened
+- **HTTP clients:** `wrap_http_errors` decorator converts `httpx.TimeoutException` → `ServiceError(504)` and all other `httpx.HTTPError` / malformed-JSON bodies → `ServiceError(502)`. `translate_service_error` preserves 4xx upstream status and 504; other 5xx collapse to 502.
+- **Pydantic request validators:** whitespace-only `member_id`, `job_id`, `recruiter_id`, `candidate_id`, `task_id`, `resume_text`, `resume_url`, `final_message`, `target_job_id` are rejected with 422. `MatchFilters.min_experience_years` is validated `>= 0`.
+- **`/ai/approve-outreach` state machine:** 409 if `task.status != AWAITING_APPROVAL`; 409 on duplicate approval for the same `candidate_id`.
+- **`/ai/hiring-assistant` atomicity:** if Kafka publish fails after the task row is inserted, the task is rolled forward to `FAILED` and the caller receives 502 instead of a silently orphaned row.
+- **`/ai/parse-resume` LLM resilience:** distinct 502 for `json.JSONDecodeError` ("invalid JSON") vs blanket LLM failures; also rejects responses that don't decode to a dict.
+- **WebSocket hub:** multi-subscriber fan-out (`dict[str, set[WebSocket]]`); dead sockets are pruned when `send_json` raises; reconnects no longer drop earlier subscribers.
+- **Consumer payload guard:** missing `payload.job_id` no longer crashes the consumer loop — task is marked `FAILED` with a clear error and a final WebSocket update is pushed.
 
 ### In Progress / Next Up
 - `app/api/auth.py` — bearer-token stub (see R1 above).

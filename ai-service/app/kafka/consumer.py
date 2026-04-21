@@ -82,6 +82,23 @@ async def _run_candidate_workflow(event: dict[str, Any]) -> None:
         )
         return
 
+    job_id = payload.get("job_id")
+    if not job_id:
+        # Guard against malformed events so a single bad message can't
+        # crash the consumer loop with a KeyError.
+        error = "payload missing required field 'job_id'"
+        logger.warning("Candidate workflow aborted task_id=%s: %s", task_id, error)
+        await task_store.mark_step_failed(
+            task_id,
+            StepResult(step=StepName.MATCH_CANDIDATES, status=StepStatus.RUNNING),
+            error=error,
+        )
+        await push_update(
+            task_id,
+            {"step": "done", "status": TaskStatus.FAILED.value, "progress": 0, "error": error},
+        )
+        return
+
     total_steps = 2 if payload.get("generate_outreach") else 1
     steps_done = 0
 
@@ -91,8 +108,8 @@ async def _run_candidate_workflow(event: dict[str, Any]) -> None:
         _progress_message(StepName.MATCH_CANDIDATES, StepStatus.RUNNING, 0),
     )
     try:
-        job = await job_client.fetch_job(payload["job_id"])
-        pool = await profile_client.fetch_candidate_pool(payload["job_id"])
+        job = await job_client.fetch_job(job_id)
+        pool = await profile_client.fetch_candidate_pool(job_id)
     except ServiceError as exc:
         await task_store.mark_step_failed(
             task_id,

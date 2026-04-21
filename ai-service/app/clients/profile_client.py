@@ -7,12 +7,13 @@ from typing import Any
 
 import httpx
 
-from app.clients.errors import ServiceError, raise_for_status
+from app.clients.errors import ServiceError, raise_for_status, wrap_http_errors
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
+@wrap_http_errors(service="profile")
 async def fetch_member(member_id: str) -> dict[str, Any]:
     """Return the profile document for a single member.
 
@@ -26,6 +27,7 @@ async def fetch_member(member_id: str) -> dict[str, Any]:
     return response.json()
 
 
+@wrap_http_errors(service="profile")
 async def fetch_candidate_pool(
     job_id: str,
     limit: int = 100,

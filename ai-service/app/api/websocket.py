@@ -18,19 +18,35 @@ logger = logging.getLogger(__name__)
 
 ws_router = APIRouter()
 
-# Maps trace_id/task_id -> active WebSocket connection.
-_connections: dict[str, WebSocket] = {}
+# Maps trace_id/task_id -> the set of active WebSocket connections.
+# Using a set (instead of a single socket) supports multiple simultaneous
+# subscribers (e.g. recruiter dashboard + candidate UI both watching the
+# same task) and tolerates reconnects without dropping earlier clients.
+_connections: dict[str, set[WebSocket]] = {}
 
 
-def get_connections() -> dict[str, WebSocket]:
+def get_connections() -> dict[str, set[WebSocket]]:
     return _connections
+
+
+def _register(key: str, websocket: WebSocket) -> None:
+    _connections.setdefault(key, set()).add(websocket)
+
+
+def _unregister(key: str, websocket: WebSocket) -> None:
+    sockets = _connections.get(key)
+    if not sockets:
+        return
+    sockets.discard(websocket)
+    if not sockets:
+        _connections.pop(key, None)
 
 
 async def _serve(websocket: WebSocket, key: str) -> None:
     """Shared connection loop for both websocket paths."""
 
-    _connections[key] = websocket
-    logger.info("WebSocket connected key=%s", key)
+    _register(key, websocket)
+    logger.info("WebSocket connected key=%s subscribers=%d", key, len(_connections[key]))
     try:
         while True:
             # Keep connection alive; we don't use client messages yet.
@@ -38,7 +54,7 @@ async def _serve(websocket: WebSocket, key: str) -> None:
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected key=%s", key)
     finally:
-        _connections.pop(key, None)
+        _unregister(key, websocket)
 
 
 @ws_router.websocket("/ws/{trace_id}")
@@ -63,19 +79,26 @@ async def candidate_websocket_endpoint(websocket: WebSocket, task_id: str) -> No
 
 
 async def push_update(key: str, data: dict) -> None:
-    """Send a JSON message to the WS identified by `key` (trace_id or task_id).
+    """Fan out a JSON message to every WS subscribed under `key`.
 
     Silently drops if no connection is registered; callers should not block
     on WebSocket availability since clients may not be subscribed yet.
+    Dead sockets (send raised) are pruned so a stuck client doesn't leak.
     """
 
-    websocket = _connections.get(key)
-    if websocket is None:
+    sockets = _connections.get(key)
+    if not sockets:
         logger.debug("No active WebSocket for key=%s", key)
         return
-    try:
-        await websocket.send_json(data)
-        logger.info("Pushed update to key=%s", key)
-    except Exception as e:
-        logger.error("Failed to push update key=%s error=%s", key, str(e))
-        _connections.pop(key, None)
+    dead: list[WebSocket] = []
+    # Iterate a copy: we mutate `sockets` via _unregister below.
+    for websocket in list(sockets):
+        try:
+            await websocket.send_json(data)
+        except Exception as e:
+            logger.error("Failed to push update key=%s error=%s", key, str(e))
+            dead.append(websocket)
+    for websocket in dead:
+        _unregister(key, websocket)
+    if sockets:
+        logger.info("Pushed update to key=%s subscribers=%d", key, len(sockets) - len(dead))

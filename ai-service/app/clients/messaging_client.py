@@ -7,12 +7,13 @@ from typing import Any
 
 import httpx
 
-from app.clients.errors import raise_for_status
+from app.clients.errors import raise_for_status, wrap_http_errors
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
+@wrap_http_errors(service="messaging")
 async def send_message(
     sender_id: str,
     recipient_id: str,
