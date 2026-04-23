@@ -1,0 +1,27 @@
+cat > .gitignore << 'EOF'
+# Dependencies
+node_modules/
+npm-debug.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+
+# Test outputs
+coverage/
+
+# JMeter
+*.jmx
+benchmark_data.csv
+EOF

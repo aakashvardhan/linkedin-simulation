@@ -1,0 +1,31 @@
+cat > /Users/kruthishamanna/Desktop/Project_folder/LinkedIn_simulation/code/.gitignore << 'EOF'
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# Build artifacts
+dist/
+build/
+
+# JMeter
+*.jmx
+benchmark_data.csv
+
+# Python virtual env
+linkedin_env/
+
+# Lock files (optional — some teams commit these)
+package-lock.json
+EOF
