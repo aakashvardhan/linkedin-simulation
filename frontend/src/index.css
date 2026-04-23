@@ -1,0 +1,103 @@
+:root {
+  --bg-color: #F3F2F0;
+  --surface-color: #ffffff;
+  --primary-color: #0A66C2;
+  --recruiter-accent: #004182;
+  --text-primary: rgba(0, 0, 0, 0.9);
+  --text-secondary: rgba(0, 0, 0, 0.6);
+  --border-color: #e0e0df;
+  --nav-height: 52px;
+  --danger-color: #d11124;
+  --hover-bg: #ebebeb;
+}
+
+/* Global Keyframes */
+@keyframes fadeInMount {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseSubtle {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Fira Sans', Ubuntu, Oxygen, 'Oxygen Sans', Cantarell, 'Droid Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Lucida Grande', Helvetica, Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Smooth mount for all views */
+.layout-container, .main-feed, .left-sidebar, .right-sidebar {
+  animation: fadeInMount 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+a {
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: color 0.2s ease;
+}
+
+ul {
+  list-style-type: none;
+}
+
+/* Base button animations */
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+button:active {
+  transform: scale(0.96) !important;
+}
+
+/* Premium Card Elevate Effect */
+.card {
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  margin-bottom: 8px;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+  border-color: transparent;
+}
+
+.layout-container {
+  max-width: 1128px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 225px minmax(0, 555px) 300px;
+  gap: 24px;
+  padding: 24px 16px;
+}
+
+@media (max-width: 1024px) {
+  .layout-container {
+    grid-template-columns: 225px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .layout-container {
+    grid-template-columns: 1fr;
+  }
+}
