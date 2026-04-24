@@ -29,26 +29,26 @@ exports.submit = async (req, res, next) => {
     const { application_id, location_city, location_state } = result;
 
     // Invalidate byJob cache for this job — new applicant just submitted
-    //await cacheDelPattern(`byJob:${job_id}:*`);
+    await cacheDelPattern(`byJob:${job_id}:*`);
 
-    // Publish to Kafka — includes geo fields for M6 geo analytics
-    // await publishEvent('application.submitted', {
-    //  event_type: 'application.submitted',
-    //  trace_id,
-    //  timestamp:  new Date().toISOString(),
-    //  actor_id:   String(member_id),
-    //  entity:     { entity_type: 'application', entity_id: String(application_id) },
-    //  payload: {
-    //    application_id,
-    //    job_id,
-    //    member_id,
-    //    resume_url:           resume_url || null,
-    //    status:               'submitted',
-    //    application_datetime: new Date().toISOString(),
-    //    location_city,
-    //    location_state,
-    //  },
-    //  idempotency_key: `app-submit-${job_id}-${member_id}`,});
+     //Publish to Kafka — includes geo fields for M6 geo analytics
+     await publishEvent('application.submitted', {
+      event_type: 'application.submitted',
+      trace_id,
+      timestamp:  new Date().toISOString(),
+      actor_id:   String(member_id),
+      entity:     { entity_type: 'application', entity_id: String(application_id) },
+      payload: {
+        application_id,
+        job_id,
+        member_id,
+        resume_url:           resume_url || null,
+        status:               'submitted',
+        application_datetime: new Date().toISOString(),
+        location_city,
+        location_state,
+      },
+      idempotency_key: `app-submit-${job_id}-${member_id}`,});
 
     return success(res, {
       application_id,
