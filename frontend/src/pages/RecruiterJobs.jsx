@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useMockData } from '../context/MockDataContext';
-import { APPLICATION_STATUSES } from '../data/mockApplicants';
-import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser } from 'react-icons/fa';
+import { APPLICATION_STATUSES, generateCandidateMatches } from '../data/mockApplicants';
+import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope } from 'react-icons/fa';
 
 const RecruiterJobs = () => {
-  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus } = useMockData();
+  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus, userProfile } = useMockData();
   const [newJob, setNewJob] = useState({
     title: '',
     company: 'My Startup',
@@ -21,9 +21,12 @@ const RecruiterJobs = () => {
   const [editForm, setEditForm] = useState(null);
 
   // Copilot States
-  const [copilotState, setCopilotState] = useState('idle'); // idle | parsing | matching | generating | review
+  const [copilotState, setCopilotState] = useState('idle'); // idle | parsing | matching | generating | results
   const [copilotLog, setCopilotLog] = useState([]);
-  const [generatedMessage, setGeneratedMessage] = useState('');
+  const [selectedJobForMatching, setSelectedJobForMatching] = useState(null);
+  const [matchedCandidates, setMatchedCandidates] = useState([]);
+  const [expandedCandidateId, setExpandedCandidateId] = useState(null);
+  const [editedEmails, setEditedEmails] = useState({});
   const [applicantsModalJob, setApplicantsModalJob] = useState(null);
   const [applicantSearch, setApplicantSearch] = useState('');
   const [resumeViewerApplicant, setResumeViewerApplicant] = useState(null);
@@ -89,33 +92,55 @@ const RecruiterJobs = () => {
   }, [jobs, search, industryFilter]);
 
   // Stream Simulation (replace with WebSocket later)
-  const triggerCopilot = () => {
+  const triggerCandidateMatching = (job) => {
+    setSelectedJobForMatching(job);
+    setMatchedCandidates([]);
+    setExpandedCandidateId(null);
+    setEditedEmails({});
     setCopilotState('parsing');
-    setCopilotLog(['Starting copilot…']);
-    
+    setCopilotLog(['Starting AI candidate matching…']);
+
     setTimeout(() => {
       setCopilotLog(prev => [...prev, '✓ Connected.']);
-      setCopilotLog(prev => [...prev, 'Analyzing candidate profile…']);
-      
+      setCopilotLog(prev => [...prev, `Analyzing requirements for "${job.title}"…`]);
+
       setTimeout(() => {
+        const applicants = applicantsByJobId[String(job.id)] ?? [];
         setCopilotState('matching');
-        setCopilotLog(prev => [...prev, '✓ Profile analyzed.']);
-        setCopilotLog(prev => [...prev, 'Matching against job requirements…']);
-        
+        setCopilotLog(prev => [...prev, '✓ Job requirements analyzed.']);
+        setCopilotLog(prev => [...prev, `Scanning ${applicants.length} applicant profiles…`]);
+
         setTimeout(() => {
            setCopilotState('generating');
-           setCopilotLog(prev => [...prev, '✓ Match score computed.']);
-           setCopilotLog(prev => [...prev, 'Drafting outreach message…']);
-           
+           setCopilotLog(prev => [...prev, '✓ Top candidates identified.']);
+           setCopilotLog(prev => [...prev, 'Generating personalized outreach…']);
+
            setTimeout(() => {
-             setCopilotLog(prev => [...prev, '✓ Draft ready.']);
-             setGeneratedMessage("Hi there! I noticed your excellent background in System Design and React. We have a great Senior role open right now that matches your skill profile perfectly. Are you open to a quick chat?");
-             setCopilotState('review');
+             const result = generateCandidateMatches(
+               job,
+               applicants,
+               userProfile?.displayName || 'Recruiter',
+             );
+             setMatchedCandidates(result.candidates);
+             setCopilotLog(prev => [...prev, `✓ Complete. ${result.candidates.length} candidates matched.`]);
+             setCopilotState('results');
            }, 2000);
         }, 2000);
       }, 2000);
     }, 1500);
   };
+
+  const resetCopilot = () => {
+    setCopilotState('idle');
+    setCopilotLog([]);
+    setSelectedJobForMatching(null);
+    setMatchedCandidates([]);
+    setExpandedCandidateId(null);
+    setEditedEmails({});
+  };
+
+  const STATUS_COLORS = { verified: '#004182', needs_review: '#c37d16', flagged: '#cc0000' };
+  const SCORE_COLOR = (s) => s >= 85 ? '#057642' : s >= 70 ? '#c37d16' : '#cc0000';
 
   return (
     <div style={{ gridColumn: 'span 3', display: 'flex', gap: '24px' }}>
@@ -247,6 +272,7 @@ const RecruiterJobs = () => {
                             </button>
                          </div>
                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <button onClick={() => triggerCandidateMatching(job)} style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: 'transparent', color: '#0A66C2', border: 'none', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }}><FaRobot /> Find Candidates</button>
                             <button onClick={() => startEdit(job)} style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: 'transparent', color: '#666', border: 'none', fontWeight: '600', cursor: 'pointer' }}><FaEdit /> Edit</button>
                             <button onClick={() => deleteJob(job.id)} style={{ display: 'flex', alignItems: 'center', gap: '4px', backgroundColor: 'transparent', color: '#cc0000', border: 'none', fontWeight: '600', cursor: 'pointer' }}><FaTrash /> Close Job</button>
                          </div>
@@ -261,53 +287,137 @@ const RecruiterJobs = () => {
       </div>
 
       {/* Recruiter Copilot Sidebar (Right 30%) */}
-      <div className="card" style={{ width: '350px', height: 'fit-content', border: '2px solid #8f5849' }}>
+      <div className="card" style={{ width: '350px', height: 'fit-content', border: '2px solid #8f5849', maxHeight: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
          <div style={{ backgroundColor: '#8f5849', color: '#fff', padding: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <FaRobot size={24} />
-            <span style={{ fontSize: '16px', fontWeight: '600' }}>Agentic Copilot</span>
-         </div>
-         
-         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <p style={{ fontSize: '14px', color: '#000000e6' }}>Generate personalized outreach drafts based on job requirements and candidate profiles.</p>
-            
-            {copilotState === 'idle' ? (
-              <button onClick={triggerCopilot} style={{ width: '100%', backgroundColor: '#0A66C2', color: '#fff', border: 'none', padding: '12px', borderRadius: '24px', fontWeight: '600', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
-                <FaRobot /> Generate Candidate Outreach
+            <span style={{ fontSize: '16px', fontWeight: '600', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              Agentic Copilot{selectedJobForMatching ? ` — ${selectedJobForMatching.title}` : ''}
+            </span>
+            {selectedJobForMatching && (
+              <button onClick={resetCopilot} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '2px' }} title="Clear">
+                <FaTimes size={14} />
               </button>
-            ) : (
+            )}
+         </div>
+
+         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', flex: 1 }}>
+
+            {copilotState === 'idle' && (
+              <div style={{ textAlign: 'center', padding: '24px 8px', color: '#666' }}>
+                <FaRobot size={32} style={{ color: '#8f5849', marginBottom: '12px' }} />
+                <p style={{ fontSize: '14px', lineHeight: '1.5' }}>
+                  Click <strong>&ldquo;Find Candidates&rdquo;</strong> on any job posting to discover top-matched candidates with personalized outreach drafts.
+                </p>
+              </div>
+            )}
+
+            {['parsing', 'matching', 'generating'].includes(copilotState) && (
               <div style={{ backgroundColor: '#f3f2ef', padding: '16px', borderRadius: '8px', border: '1px solid #e0e0df' }}>
                  <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px' }}>Progress</h3>
-                 
                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', fontFamily: 'monospace', color: '#000', maxHeight: '150px', overflowY: 'auto' }}>
                     {copilotLog.map((log, i) => (
                       <span key={i} style={{ color: log.includes('✓') ? '#004182' : '#666' }}>{log}</span>
                     ))}
                  </div>
-                 
-                 {copilotState !== 'review' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', color: '#0A66C2', fontSize: '14px', fontWeight: '600' }}>
-                       <FaSpinner className="spin-animation" /> 
-                       {copilotState === 'parsing' && 'Analyzing…'}
-                       {copilotState === 'matching' && 'Matching…'}
-                       {copilotState === 'generating' && 'Drafting…'}
-                    </div>
-                 )}
+                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', color: '#0A66C2', fontSize: '14px', fontWeight: '600' }}>
+                    <FaSpinner className="spin-animation" />
+                    {copilotState === 'parsing' && 'Analyzing…'}
+                    {copilotState === 'matching' && 'Matching…'}
+                    {copilotState === 'generating' && 'Drafting…'}
+                 </div>
               </div>
             )}
 
-            {/* Human-in-the-loop Editing */}
-            {copilotState === 'review' && (
-               <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                 <h3 style={{ fontSize: '14px', fontWeight: '600', color: '#c37d16' }}>Review before sending</h3>
-                 <textarea 
-                   value={generatedMessage}
-                   onChange={(e) => setGeneratedMessage(e.target.value)}
-                   style={{ width: '100%', padding: '12px', border: '1px solid #000000e6', borderRadius: '4px', height: '120px', fontFamily: 'inherit', fontSize: '13px' }}
-                 />
-                 <button onClick={() => setCopilotState('idle')} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', backgroundColor: '#004182', color: '#fff', border: 'none', padding: '12px', borderRadius: '24px', fontWeight: '600', cursor: 'pointer', marginTop: '8px' }}>
-                   <FaPaperPlane /> Approve & Dispatch Message
-                 </button>
-               </div>
+            {copilotState === 'results' && matchedCandidates.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <h3 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>
+                      {matchedCandidates.length} Candidates Matched
+                    </h3>
+                    <p style={{ fontSize: '12px', color: '#666', margin: '2px 0 0' }}>{selectedJobForMatching?.title}</p>
+                  </div>
+                  <button onClick={resetCopilot} style={{ fontSize: '12px', color: '#0A66C2', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+                    New Search
+                  </button>
+                </div>
+
+                {matchedCandidates.map((c) => {
+                  const isExpanded = expandedCandidateId === c.candidateId;
+                  const emailText = editedEmails[c.candidateId] ?? c.emailDraft;
+                  return (
+                    <div key={c.candidateId} style={{ backgroundColor: '#fff', border: '1px solid #e0e0df', borderRadius: '8px', padding: '12px', transition: 'box-shadow 0.15s', boxShadow: isExpanded ? '0 2px 8px rgba(0,0,0,0.1)' : 'none' }}>
+                      {/* Header: avatar, name, score */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#E8F3FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#004182', flexShrink: 0 }}>
+                          <FaUser size={14} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontSize: '14px', fontWeight: '600', margin: 0, color: '#000000e6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</p>
+                          <p style={{ fontSize: '11px', color: '#666', margin: '1px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.headline}</p>
+                        </div>
+                        <div style={{ backgroundColor: SCORE_COLOR(c.matchScore) + '18', color: SCORE_COLOR(c.matchScore), fontWeight: '700', fontSize: '13px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap' }}>
+                          {c.matchScore}/100
+                        </div>
+                      </div>
+
+                      {/* Skill pills */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '10px' }}>
+                        {c.matchedSkills.slice(0, 4).map((sk) => (
+                          <span key={sk} style={{ backgroundColor: '#eef3f8', color: '#004182', borderRadius: '12px', padding: '2px 8px', fontSize: '11px', fontWeight: '500' }}>{sk}</span>
+                        ))}
+                      </div>
+
+                      {/* Email draft toggle */}
+                      <button
+                        onClick={() => setExpandedCandidateId(isExpanded ? null : c.candidateId)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', color: '#0A66C2', fontSize: '12px', fontWeight: '600', cursor: 'pointer', padding: '4px 0', width: '100%' }}
+                      >
+                        <FaEnvelope size={11} />
+                        Email Draft
+                        {isExpanded ? <FaChevronUp size={10} style={{ marginLeft: 'auto' }} /> : <FaChevronDown size={10} style={{ marginLeft: 'auto' }} />}
+                      </button>
+
+                      {isExpanded && (
+                        <div style={{ marginTop: '8px' }}>
+                          <textarea
+                            value={emailText}
+                            onChange={(e) => setEditedEmails(prev => ({ ...prev, [c.candidateId]: e.target.value }))}
+                            style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '12px', fontFamily: 'inherit', lineHeight: '1.5', maxHeight: '140px', minHeight: '100px', resize: 'vertical', boxSizing: 'border-box' }}
+                          />
+                          <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                            <button
+                              onClick={() => navigator.clipboard?.writeText(emailText)}
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#666', background: '#f3f2ef', border: '1px solid #e0e0df', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer' }}
+                            >
+                              <FaCopy size={10} /> Copy
+                            </button>
+                            <button
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#fff', background: '#004182', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', marginLeft: 'auto' }}
+                            >
+                              <FaPaperPlane size={10} /> Send
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Human Evaluation */}
+                      <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
+                        <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Human Evaluation Required</p>
+                        {c.humanEvaluation.map((ev) => (
+                          <div key={ev.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: '12px' }}>
+                            <span style={{ color: '#333' }}>{ev.key}</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#555' }}>
+                              {ev.value}
+                              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: STATUS_COLORS[ev.status] || '#999', display: 'inline-block', flexShrink: 0 }} />
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
          </div>

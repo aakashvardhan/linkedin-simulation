@@ -60,6 +60,7 @@ export function makeApi({ getAuthToken } = {}) {
       // FastAPI agent service should expose these.
       request: (payload) => api.post('/ai/request', payload),
       status: (payload) => api.post('/ai/status', payload),
+      candidateMatch: (payload) => api.post('/ai/candidate-match', payload),
     },
   };
 }
