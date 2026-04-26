@@ -1,8 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useMockData } from '../context/MockDataContext';
 import { FaSearch, FaMapMarkerAlt, FaBriefcase, FaCheckCircle, FaSpinner, FaBookmark, FaRegBookmark } from 'react-icons/fa';
+import { extractSkillsFromResume, calculateMatchScore } from '../utils/unitFunctions';
+import * as pdfjs from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const Jobs = () => {
+  useEffect(() => {
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
+  }, []);
   const { jobs, applyToJob, toggleSaveJob, isJobSaved, userProfile } = useMockData();
   const [searchTerm, setSearchTerm] = useState('');
   const [isRemoteOnly, setIsRemoteOnly] = useState(false);
@@ -17,6 +23,14 @@ const Jobs = () => {
   const [locationFilter, setLocationFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
+
+  // Resume matching (demo): parse skills from pasted resume and rank jobs.
+  const [resumeMatchText, setResumeMatchText] = useState('');
+  const [resumeSkills, setResumeSkills] = useState([]);
+  const [resumeMatchResults, setResumeMatchResults] = useState([]);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeFileName, setResumeFileName] = useState('');
+  const resumeFileInputRef = useRef(null);
 
   const buildApplicationTemplate = () => {
     const name = userProfile?.displayName || 'Your Name';
@@ -56,6 +70,86 @@ const Jobs = () => {
     }
     return filteredJobs[0] || null;
   }, [jobs, selectedJobId, filteredJobs]);
+
+  const handleParseResumeAndMatch = () => {
+    const skills = extractSkillsFromResume(resumeMatchText);
+    setResumeSkills(skills);
+    const required = ['react', 'typescript', 'javascript', 'node', 'python', 'sql', 'kafka', 'aws', 'docker', 'kubernetes'];
+    const ranked = jobs
+      .map((job) => ({
+        jobId: job.id,
+        score: calculateMatchScore({ title: job.title, description: job.description }, skills, required),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+    setResumeMatchResults(ranked);
+  };
+
+  const parsePdfToText = async (arrayBuffer) => {
+    const doc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    let text = '';
+    const maxPages = Math.min(doc.numPages || 0, 12);
+    for (let p = 1; p <= maxPages; p += 1) {
+      const page = await doc.getPage(p);
+      const content = await page.getTextContent();
+      const pageText = (content.items || [])
+        .map((it) => (typeof it.str === 'string' ? it.str : ''))
+        .filter(Boolean)
+        .join(' ');
+      text += `${pageText}\n`;
+      if (text.length > 20000) break;
+    }
+    return text.trim();
+  };
+
+  const handleResumeUpload = async (fileList) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    setResumeFileName(file.name || '');
+    const maxBytes = 7 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      window.alert('Please upload a resume under 7 MB for this demo.');
+      return;
+    }
+
+    setResumeLoading(true);
+    try {
+      const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+      const isText = file.type.startsWith('text/') || /\.(txt|md|rtf)$/i.test(file.name || '');
+
+      if (isText) {
+        const txt = await file.text();
+        setResumeMatchText(txt);
+        // Auto-run match after upload
+        setTimeout(() => handleParseResumeAndMatch(), 0);
+        return;
+      }
+
+      if (isPdf) {
+        const buf = await file.arrayBuffer();
+        const txt = await parsePdfToText(buf);
+        if (!txt) {
+          window.alert('Could not extract text from that PDF. Try a text resume or copy/paste.');
+          return;
+        }
+        setResumeMatchText(txt);
+        setTimeout(() => handleParseResumeAndMatch(), 0);
+        return;
+      }
+
+      window.alert('Supported resume formats: PDF or text files (.txt).');
+    } catch {
+      window.alert('Could not read that resume. Try another file or paste text.');
+    } finally {
+      setResumeLoading(false);
+    }
+  };
+
+  const scoreByJobId = useMemo(() => {
+    const m = new Map();
+    (resumeMatchResults || []).forEach((r) => m.set(r.jobId, r.score));
+    return m;
+  }, [resumeMatchResults]);
 
   const handleApplyClick = () => {
     if (selectedJob) {
@@ -141,6 +235,145 @@ const Jobs = () => {
          </label>
       </div>
 
+      {/* Resume matcher */}
+      <div className="card" style={{ padding: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: '280px' }}>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '6px' }}>Resume → Top matching jobs</h2>
+            <p style={{ fontSize: '12px', color: '#666', marginBottom: '10px', lineHeight: 1.4 }}>
+              Paste resume text (or a profile summary). We extract skills and rank the best matching jobs from the list below.
+            </p>
+            <textarea
+              value={resumeMatchText}
+              onChange={(e) => setResumeMatchText(e.target.value)}
+              placeholder="Paste resume text here…"
+              rows={4}
+              style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #e0e0df', borderRadius: '8px', padding: '10px 12px', fontFamily: 'inherit', fontSize: '13px', resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
+              {/* Use label+input instead of programmatic click for better Safari compatibility */}
+              <label
+                style={{
+                  position: 'relative',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#fff',
+                  border: '1px solid #0A66C2',
+                  borderRadius: '20px',
+                  padding: '8px 14px',
+                  fontWeight: 700,
+                  color: '#0A66C2',
+                  cursor: resumeLoading ? 'progress' : 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                {resumeLoading ? 'Uploading…' : 'Upload resume (PDF/TXT)'}
+                <input
+                  ref={resumeFileInputRef}
+                  type="file"
+                  accept=".pdf,.txt,text/plain,application/pdf"
+                  onChange={(e) => {
+                    handleResumeUpload(e.target.files);
+                    e.target.value = '';
+                  }}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    opacity: 0,
+                    cursor: resumeLoading ? 'progress' : 'pointer',
+                  }}
+                  disabled={resumeLoading}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={handleParseResumeAndMatch}
+                disabled={!resumeMatchText.trim()}
+                style={{
+                  backgroundColor: resumeMatchText.trim() ? '#0A66C2' : '#e0e0df',
+                  color: resumeMatchText.trim() ? '#fff' : '#666',
+                  border: 'none',
+                  borderRadius: '20px',
+                  padding: '8px 16px',
+                  fontWeight: 700,
+                  cursor: resumeMatchText.trim() ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Parse resume & match
+              </button>
+              <button
+                type="button"
+                onClick={() => { setResumeMatchText(''); setResumeSkills([]); setResumeMatchResults([]); setResumeFileName(''); }}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid #e0e0df',
+                  borderRadius: '20px',
+                  padding: '8px 14px',
+                  fontWeight: 700,
+                  color: '#666',
+                  cursor: 'pointer',
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            {resumeFileName ? (
+              <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#666' }}>
+                Uploaded: <span style={{ color: '#000000e6', fontWeight: 600 }}>{resumeFileName}</span>
+              </p>
+            ) : null}
+          </div>
+
+          <div style={{ width: '340px', maxWidth: '100%' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 700, marginBottom: '8px' }}>Top matches</h3>
+            {resumeMatchResults.length === 0 ? (
+              <p style={{ fontSize: '13px', color: '#666', margin: 0 }}>
+                Run matching to see top jobs.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {resumeMatchResults.map((r) => {
+                  const job = jobs.find((j) => j.id === r.jobId);
+                  if (!job) return null;
+                  return (
+                    <button
+                      key={String(r.jobId)}
+                      type="button"
+                      onClick={() => setSelectedJobId(job.id)}
+                      style={{
+                        textAlign: 'left',
+                        background: '#fff',
+                        border: '1px solid #e0e0df',
+                        borderRadius: '10px',
+                        padding: '10px 12px',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                        <div style={{ fontWeight: 800, color: '#000000e6', fontSize: '13px', lineHeight: 1.2 }}>
+                          {job.title}
+                          <div style={{ fontWeight: 500, color: '#666', fontSize: '12px', marginTop: '2px' }}>{job.company}</div>
+                        </div>
+                        <div style={{ background: 'rgba(10, 102, 194, 0.12)', color: '#0A66C2', fontWeight: 800, borderRadius: '999px', padding: '6px 10px', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                          {r.score}% match
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {resumeSkills.length > 0 ? (
+              <p style={{ margin: '12px 0 0', fontSize: '12px', color: '#666', lineHeight: 1.4 }}>
+                Extracted skills: <span style={{ color: '#000000e6', fontWeight: 600 }}>{resumeSkills.join(', ')}</span>
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
       {/* Split-View Layout */}
       <div style={{ display: 'flex', flex: 1, gap: '24px', overflow: 'hidden' }}>
         
@@ -165,7 +398,14 @@ const Jobs = () => {
               <div style={{ display: 'flex', gap: '12px' }}>
                  <img src={`https://ui-avatars.com/api/?name=${job.company.replace(' ', '+')}&background=random&color=fff&size=56`} alt="Company" style={{ width: '56px', height: '56px' }} />
                  <div>
-                    <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#0A66C2' }}>{job.title}</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#0A66C2' }}>{job.title}</h3>
+                      {scoreByJobId.has(job.id) ? (
+                        <span style={{ fontSize: '11px', fontWeight: 800, color: '#0A66C2', background: 'rgba(10, 102, 194, 0.12)', padding: '4px 8px', borderRadius: '999px', whiteSpace: 'nowrap' }}>
+                          {scoreByJobId.get(job.id)}% match
+                        </span>
+                      ) : null}
+                    </div>
                     <p style={{ fontSize: '14px', color: '#000000e6' }}>{job.company}</p>
                     <p style={{ fontSize: '14px', color: '#666' }}>{job.location} ({job.remote ? 'Remote' : 'On-site'})</p>
                     {job.industry ? (
