@@ -156,3 +156,11 @@ CREATE TABLE IF NOT EXISTS applications (
     CONSTRAINT fk_app_member FOREIGN KEY (member_id)
         REFERENCES members(member_id) ON DELETE CASCADE
 );
+-- Compound indexes for analytics queries (M4)
+ALTER TABLE job_postings ADD INDEX idx_jobs_analytics (status, applicants_count, views_count, saves_count);
+ALTER TABLE job_postings ADD INDEX idx_jobs_recruiter_status (recruiter_id, status, posted_datetime);
+ALTER TABLE applications ADD INDEX idx_app_member_status (member_id, status, application_datetime);
+ALTER TABLE applications ADD INDEX idx_app_job_status (job_id, status, application_datetime);
+ALTER TABLE members ADD INDEX idx_members_location (location_city, location_state);
+ALTER TABLE connections ADD INDEX idx_connections_status_date (status, requested_at);
+ALTER TABLE saved_jobs ADD INDEX idx_saved_jobs_date (member_id, saved_at);
