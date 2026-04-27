@@ -1,10 +1,14 @@
+import hashlib
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from fastapi import APIRouter, Depends, HTTPException, status
-
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_optional_user
+from app.core.kafka import publisher
+from app.core.redis import cache_delete, cache_get, cache_set
 from app.core.responses import success_response
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.company import Company
@@ -23,7 +27,24 @@ from app.schemas.member import (
 )
 
 router = APIRouter()
+def _publish_profile_viewed(profile_owner_id: int, current_user: dict | None) -> None:
+    viewer_id = str(current_user.get('user_id')) if current_user else 'anonymous'
+    viewer_role = current_user.get('role', 'anonymous') if current_user else 'anonymous'
+    
+    # Time-bucketed idempotency key — per minute, prevents refresh inflation
+    minute_bucket = datetime.now(timezone.utc).strftime('%Y%m%d%H%M')
+    idempotency_key = hashlib.md5(
+        f'{viewer_id}:{profile_owner_id}:{minute_bucket}'.encode()
+    ).hexdigest()
 
+    publisher.publish(
+        topic='profile.viewed',
+        actor_id=viewer_id,
+        entity_type='member',
+        entity_id=str(profile_owner_id),
+        payload={'viewer_role': viewer_role},
+        idempotency_key=idempotency_key,
+    )
 
 def _member_query(db: Session):
     return db.query(Member).options(
@@ -138,12 +159,31 @@ def create_member(payload: MemberCreateRequest, db: Session = Depends(get_db)):
 
 
 @router.post('/members/get')
-def get_member(payload: MemberGetRequest, db: Session = Depends(get_db)):
+def get_member(
+    payload: MemberGetRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_optional_user),
+):
+    cache_key = f'member:{payload.member_id}'
+    cached = cache_get(cache_key)
+    if cached:
+        # Still publish view event even on cache hit
+        _publish_profile_viewed(payload.member_id, current_user)
+        return cached
+
     member = _member_query(db).filter(Member.member_id == payload.member_id).first()
     if not member:
         raise HTTPException(status_code=404, detail='Member not found')
-    return success_response(_member_data(member))
 
+    member.profile_views = (member.profile_views or 0) + 1
+    db.commit()
+    db.refresh(member)
+
+    _publish_profile_viewed(payload.member_id, current_user)
+
+    response = success_response(_member_data(member))
+    cache_set(cache_key, response, ttl=300)
+    return response
 
 @router.post('/members/update')
 def update_member(
@@ -193,6 +233,7 @@ def update_member(
         db.rollback()
         raise HTTPException(status_code=409, detail='A member with this email already exists') from exc
     db.refresh(member)
+    cache_delete(f'member:{payload.member_id}')
     return success_response(
         {
             'member_id': member.member_id,
@@ -216,6 +257,7 @@ def delete_member(
         raise HTTPException(status_code=404, detail='Member not found')
     db.delete(member)
     db.commit()
+    cache_delete(f'member:{payload.member_id}')
     return success_response({'member_id': payload.member_id, 'deleted': True})
 
 

@@ -47,7 +47,12 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-
+  redis:
+    image: redis:7-alpine
+    container_name: linkedin_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
   backend:
     build: .
     container_name: linkedin_m3m4_backend
