@@ -67,13 +67,18 @@ ai-service/
 
 ### Prerequisites
 - Docker and Docker Compose
-- OpenRouter API key — get one at [openrouter.ai](https://openrouter.ai)
+- An LLM API key:
+  - OpenRouter (recommended) — get one at [openrouter.ai](https://openrouter.ai)
+  - or Groq — get one at [groq.com](https://groq.com)
 
 ### Environment variables
 Create a `.env` file in the `ai-service/` directory:
 ```
 OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=google/gemma-4-31b-it:free
+# (optional alternative)
+GROQ_API_KEY=...
+GROQ_MODEL=llama-3.1-8b-instant
 KAFKA_BOOTSTRAP=ai_kafka:9092
 MONGO_URI=mongodb://ai_mongo:27017
 REDIS_URL=redis://ai_redis:6379
