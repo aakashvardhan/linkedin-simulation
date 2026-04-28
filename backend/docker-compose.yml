@@ -12,6 +12,11 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mongo:
     image: mongo:7
@@ -21,6 +26,13 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: linkedin_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -47,34 +59,57 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-  redis:
-    image: redis:7-alpine
-    container_name: linkedin_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
+
   backend:
     build: .
-    container_name: linkedin_m3m4_backend
     restart: unless-stopped
     depends_on:
-      - mysql
-      - mongo
-      - kafka
-    env_file:
-      - .env.example
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      kafka:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: linkedin_simulation
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MONGO_URI: mongodb://mongo:27017
+      REDIS_URL: redis://redis:6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ENABLE_KAFKA: "true"
+      ENABLE_REDIS: "true"
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DEBUG: "false"
+      AUTO_CREATE_SCHEMA: "true"
     ports:
       - "8000:8000"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
   consumer:
     build: .
-    container_name: linkedin_m3m4_consumer
     restart: unless-stopped
     depends_on:
       - mongo
       - kafka
-    env_file:
-      - .env.example
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: linkedin_simulation
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MONGO_URI: mongodb://mongo:27017
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ENABLE_KAFKA: "true"
+      ENABLE_REDIS: "false"
     command: ["python", "consumer.py"]
 
 volumes:
