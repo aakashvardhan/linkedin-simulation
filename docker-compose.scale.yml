@@ -1,0 +1,53 @@
+# docker-compose.scale.yml
+# Override file for multi-replica deployment comparison benchmark.
+#
+# Usage:
+#   Single instance (baseline):
+#     docker compose up -d
+#     → application-service runs as 1 container on port 8004
+#     → JMeter targets localhost:8004
+#
+#   Multi-replica (scaled):
+#     docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale application-service=3
+#     → 3 application-service containers: application-service-1/2/3
+#     → Nginx load balancer on port 8080 distributes across all 3
+#     → JMeter targets localhost:8080
+#
+# IMPORTANT: When scaling, remove the fixed port mapping from the base
+# docker-compose.yml for application-service (8004:8004) — Docker can't
+# map the same host port to 3 containers. This file removes that mapping.
+# Nginx is the only entry point from the host.
+
+networks:
+  linkedin-net:
+    driver: bridge
+
+services:
+
+  # ── Remove fixed port from application-service when scaling ──────────────
+  # Containers communicate on the internal network only.
+  # Nginx is the sole host-facing entry point on port 8080.
+  application-service:
+    ports: []   # Remove host port mapping — Nginx handles external access
+    networks:
+      - linkedin-net
+
+  # ── Nginx load balancer ───────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: nginx-lb
+    restart: unless-stopped
+    ports:
+      - "8088:8080"       # Host port 8080 → Nginx → 3 application-service replicas
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - application-service
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

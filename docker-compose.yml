@@ -1,0 +1,333 @@
+networks:
+  linkedin-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  mongo-data:
+  redis-data:
+  zookeeper-data:
+  kafka-data:
+
+x-mysql-env: &mysql-env
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_USER: root
+  DB_PASSWORD: linkedin_pass
+  DB_NAME: linkedin_simulation
+
+x-mongo-env: &mongo-env
+  MONGO_URI: mongodb://mongo:27017/linkedin_simulation
+
+x-kafka-env: &kafka-env
+  KAFKA_BROKER: kafka:9092
+
+x-redis-env: &redis-env
+  REDIS_URL: redis://redis:6379
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────────
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: linkedin_pass
+      MYSQL_DATABASE: linkedin_simulation
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./scripts/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-plinkedin_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  mongo:
+    image: mongo:7.0
+    container_name: mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - linkedin-net
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/commands/srvr || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    restart: unless-stopped
+    # Use simple depends_on without health condition — Kafka retries Zookeeper internally
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
+  # ── Application Services ──────────────────────────────────────────────────────
+
+  profile-service:
+    build:
+      context: ./services/profile-service
+      dockerfile: Dockerfile
+    container_name: profile-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: [*mysql-env, *kafka-env, *redis-env]
+      PORT: "8001"
+      KAFKA_CLIENT_ID: profile-service
+    ports:
+      - "8001:8001"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  job-service:
+    build:
+      context: ./services/job-service
+      dockerfile: Dockerfile
+    container_name: job-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: [*mysql-env, *kafka-env, *redis-env]
+      PORT: "8002"
+      KAFKA_CLIENT_ID: job-service
+    ports:
+      - "8002:8002"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  connection-service:
+    build:
+      context: ./services/connection-service
+      dockerfile: Dockerfile
+    container_name: connection-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: [*mysql-env, *kafka-env]
+      PORT: "8003"
+      KAFKA_CLIENT_ID: connection-service
+    ports:
+      - "8003:8003"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # FIXED
+  application-service:
+    build:
+      context: ./services/application-service
+      dockerfile: Dockerfile
+    container_name: application-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      <<: [*mysql-env, *mongo-env, *kafka-env, *redis-env]
+      PORT: "8004"
+      KAFKA_CLIENT_ID: application-service
+      REDIS_HOST: redis        # ← add this
+      REDIS_PORT: "6379"
+    ports:
+      - "8004:8004"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  messaging-service:
+    build:
+      context: ./services/messaging-service
+      dockerfile: Dockerfile
+    container_name: messaging-service
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      <<: [*mongo-env, *kafka-env]
+      PORT: "8005"
+      KAFKA_CLIENT_ID: messaging-service
+    ports:
+      - "8005:8005"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: analytics-service
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: [*mongo-env, *kafka-env]
+      PORT: "8006"
+      KAFKA_CLIENT_ID: analytics-service
+      KAFKA_GROUP_ID: analytics-consumer-group
+    ports:
+      - "8006:8006"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  ai-service:
+    build:
+      context: ./services/ai-service
+      dockerfile: Dockerfile
+    container_name: ai-service
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      <<: [*mongo-env, *kafka-env]
+      PORT: "8007"
+      KAFKA_CLIENT_ID: ai-service
+    ports:
+      - "8007:8007"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: client
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

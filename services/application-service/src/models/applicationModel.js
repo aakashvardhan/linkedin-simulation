@@ -167,11 +167,15 @@ async function getApplicationsByJob(
   const [rows] = await db.query(dataSql, dataParams);
 
   // 4. Skills batch fetch — array IN clause, MUST use query()
+  // FIX: Build placeholders dynamically (e.g. ?,?,?) and spread memberIds
+  // directly as params. Wrapping in [memberIds] causes mysqld_stmt_execute
+  // error in mysql2 when the array has one or more elements.
   if (rows.length > 0) {
     const memberIds   = rows.map((r) => Number(r.member_id));
+    const placeholders = memberIds.map(() => '?').join(',');
     const [skillRows] = await db.query(
-      'SELECT member_id, skill_name FROM member_skills WHERE member_id IN (?)',
-      [memberIds]
+      `SELECT member_id, skill_name FROM member_skills WHERE member_id IN (${placeholders})`,
+      memberIds
     );
 
     // Group skills by member_id
