@@ -1,4 +1,3 @@
-cat > /Users/kruthishamanna/Desktop/Project_folder/LinkedIn_simulation/code/.gitignore << 'EOF'
 # Dependencies
 node_modules/
 
@@ -19,8 +18,8 @@ npm-debug.log*
 dist/
 build/
 
-# JMeter
-*.jmx
+# JMeter — keep .jmx test plans; ignore result files only
+jmeter/results/*.jtl
 benchmark_data.csv
 
 # Python virtual env
@@ -28,4 +27,3 @@ linkedin_env/
 
 # Lock files (optional — some teams commit these)
 package-lock.json
-EOF
