@@ -38,8 +38,8 @@ CONFIGS = ['B', 'B+S', 'B+S+K', 'B+S+K+Other']
 CONFIG_COLORS = [COLORS['B'], COLORS['B+S'], COLORS['B+S+K'], COLORS['B+S+K+Other']]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SCENARIO A — POST /applications/byJob (Read Benchmark)
-# 50 threads, 60s duration, warm Redis cache for B+S and above
+# SCENARIO A — POST /jobs/search (Read Benchmark)
+# 100 threads, 60s duration, warm Redis cache for B+S and above
 # ══════════════════════════════════════════════════════════════════════════════
 
 scenario_A_latency    = [14884, 12, 3, 6]      # ms — lower is better
@@ -58,7 +58,7 @@ for bar, val in zip(bars, scenario_A_latency):
     ax.text(bar.get_x() + bar.get_width()/2, y_pos,
             label, ha='center', va='bottom', fontsize=10, fontweight='bold')
 
-ax.set_title('Scenario A — Avg Response Time\nPOST /applications/byJob | 100 Concurrent Threads',
+ax.set_title('Scenario A — Avg Response Time\nPOST /jobs/search | 100 Concurrent Threads',
              fontsize=13, fontweight='bold', pad=15)
 ax.set_xlabel('Configuration', fontsize=12)
 ax.set_ylabel('Avg Response Time (ms) — lower is better', fontsize=11)
@@ -90,7 +90,7 @@ for bar, val in zip(bars, scenario_A_throughput):
     ax.text(bar.get_x() + bar.get_width()/2, y_pos,
             label, ha='center', va='bottom', fontsize=10, fontweight='bold')
 
-ax.set_title('Scenario A — Throughput\nPOST /applications/byJob | 100 Concurrent Threads',
+ax.set_title('Scenario A — Throughput\nPOST /jobs/search | 100 Concurrent Threads',
              fontsize=13, fontweight='bold', pad=15)
 ax.set_xlabel('Configuration', fontsize=12)
 ax.set_ylabel('Throughput (req/s) — higher is better', fontsize=11)
@@ -98,15 +98,21 @@ ax.set_ylim(0, max(scenario_A_throughput) * 1.2)
 ax.grid(axis='y', alpha=0.4, zorder=0)
 ax.set_axisbelow(True)
 
-# Add improvement annotation
-improvement = ((scenario_A_throughput[1] - scenario_A_throughput[0]) / scenario_A_throughput[0]) * 100
-ax.annotate(f'+{improvement:.0f}x throughput\nwith Redis cache',
+# Multiplier: B+S / B (e.g. 3021.1 / 2.8 ≈ 1,079x)
+improvement_x = scenario_A_throughput[1] / scenario_A_throughput[0]
+ax.annotate(f'+{improvement_x:,.0f}x throughput\nwith Redis cache',
             xy=(1, scenario_A_throughput[1]),
             xytext=(2.2, scenario_A_throughput[1] * 0.7),
             arrowprops=dict(arrowstyle='->', color='green', lw=1.5),
             fontsize=9, color='green', ha='center')
 
-plt.tight_layout()
+# Explain B+S → B+S+K throughput drop as a footnote below the chart
+fig.text(0.5, 0.01,
+         '* B+S+K drop: Kafka job.viewed publish is awaited in the read path — adds per-request latency under concurrency',
+         ha='center', fontsize=8, color='#E65100',
+         bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFF3E0', edgecolor='#E65100'))
+
+plt.tight_layout(rect=[0, 0.06, 1, 1])
 plt.savefig('charts/chart_scenario_A_throughput.png', dpi=150, bbox_inches='tight')
 plt.close()
 print('Saved: charts/chart_scenario_A_throughput.png')
@@ -195,7 +201,7 @@ deploy_colors     = [COLORS['single'], COLORS['multi']]
 # ── Chart 5: Deployment Comparison ───────────────────────────────────────────
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 fig.suptitle('Deployment Comparison: Single Instance vs Multi-Replica\n'
-             '100 Concurrent Threads · POST /applications/byJob (Read)',
+             '100 Concurrent Threads · POST /jobs/search (Read)',
              fontsize=13, fontweight='bold')
 
 # Latency
