@@ -18,7 +18,9 @@ services:
       retries: 6
       start_period: 60s
     ports:
+      # PLAINTEXT_HOST listens on 9093 in-container; publish both so host clients work with either port.
       - "9093:9093"
+      - "9092:9093"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: ai_zookeeper:2181

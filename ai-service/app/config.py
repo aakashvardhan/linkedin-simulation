@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """
 
     # Infrastructure
-    kafka_bootstrap: str = "localhost:9092"
+    kafka_bootstrap: str = "localhost:9093"
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db_name: str = "ai_service"
     redis_url: str = "redis://localhost:6379"

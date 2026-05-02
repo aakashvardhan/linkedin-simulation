@@ -31,6 +31,16 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+async def _run_kafka_consumer() -> None:
+    try:
+        await start_consumer()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Kafka consumer failed")
+
+
 app = FastAPI(title="LinkedIn AI Agent Service")
 
 app.include_router(router, prefix="/agent")
@@ -41,7 +51,7 @@ app.include_router(ws_router)
 @app.on_event("startup")
 async def startup() -> None:
     logger.info("Starting AI Agent Service")
-    asyncio.create_task(start_consumer())
+    asyncio.create_task(_run_kafka_consumer())
 
 
 @app.on_event("shutdown")
