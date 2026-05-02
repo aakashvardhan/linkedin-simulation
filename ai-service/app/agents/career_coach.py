@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -19,7 +20,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(
-    api_key=settings.groq_api_key,
+    api_key=settings.groq_api_key.get_secret_value(),
     base_url=settings.groq_base_url,
 )
 
@@ -37,6 +38,31 @@ def _compute_gap(job: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_INSTRUCT_HINT = re.compile(
+    r"ignore\s+(previous|prior|above)\s+instructions?",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_for_prompt_blob(label: str, obj: Any) -> str:
+    """Serialize structured data with ASCII-safe JSON and mild instruction stripping."""
+
+    def _scrub(o: Any) -> Any:
+        if isinstance(o, dict):
+            return {str(k): _scrub(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_scrub(v) for v in o]
+        if isinstance(o, str):
+            cleaned = "".join(ch for ch in o if ch >= " " or ch in "\n\t\r")
+            if _INSTRUCT_HINT.search(cleaned):
+                cleaned = _INSTRUCT_HINT.sub("[redacted]", cleaned)
+            return cleaned
+        return o
+
+    payload = json.dumps(_scrub(obj), ensure_ascii=True)
+    return f"{label}_DATA_START\n{payload}\n{label}_DATA_END"
+
+
 async def _generate_suggestions(
     job: dict[str, Any],
     member: dict[str, Any],
@@ -50,9 +76,9 @@ async def _generate_suggestions(
         "skill_recommendations (list of up to 5 strings), "
         "resume_tips (list of up to 5 strings). "
         "No markdown, no code fences, no commentary.\n\n"
-        f"Candidate profile: {json.dumps(member)}\n"
-        f"Target job: {json.dumps(job)}\n"
-        f"Gap analysis: {json.dumps(gap)}\n"
+        f"{_sanitize_for_prompt_blob('CANDIDATE_PROFILE', member)}\n"
+        f"{_sanitize_for_prompt_blob('TARGET_JOB', job)}\n"
+        f"{_sanitize_for_prompt_blob('GAP_ANALYSIS', gap)}\n"
     )
 
     response = await _client.chat.completions.create(
@@ -62,10 +88,24 @@ async def _generate_suggestions(
             {"role": "user", "content": prompt},
         ],
     )
-    raw = response.choices[0].message.content.strip()
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        raise ValueError("LLM returned no choices")
+    msg = getattr(choices[0], "message", None)
+    content = getattr(msg, "content", None) if msg is not None else None
+    if content is None:
+        raise ValueError("LLM returned empty message content")
+    raw = str(content).strip()
+    if not raw:
+        raise ValueError("LLM returned empty content")
     if raw.startswith("```"):
         lines = raw.split("\n")
-        raw = "\n".join(lines[1:-1]).strip()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            raw = "\n".join(lines[1:-1]).strip()
+        else:
+            raw = "\n".join(lines[1:]).strip()
+    if not raw:
+        raise ValueError("No JSON content after stripping code fences")
     return json.loads(raw)
 
 
@@ -73,14 +113,21 @@ async def coach(job: dict[str, Any], member: dict[str, Any]) -> dict[str, Any]:
     """Return gap analysis + LLM-generated career suggestions."""
 
     gap = _compute_gap(job, member)
+    fallback = {
+        "headline": "",
+        "skill_recommendations": [],
+        "resume_tips": [],
+        "error": "LLM returned invalid JSON",
+    }
     try:
         suggestions = await _generate_suggestions(job, member, gap)
     except json.JSONDecodeError as e:
         logger.warning("Career coach JSON parse failed: %s", e)
+        suggestions = {**fallback, "error": "LLM returned invalid JSON"}
+    except Exception:
+        logger.exception("Career coach suggestion generation failed")
         suggestions = {
-            "headline": "",
-            "skill_recommendations": [],
-            "resume_tips": [],
-            "error": "LLM returned invalid JSON",
+            **fallback,
+            "error": "Career coach failed to produce suggestions",
         }
     return {"gap": gap, "suggestions": suggestions}

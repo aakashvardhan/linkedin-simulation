@@ -7,7 +7,6 @@ functions so callers don't need to know about the driver internals.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 
@@ -19,18 +18,17 @@ logger = logging.getLogger(__name__)
 AI_TASKS_COLLECTION = "ai_tasks"
 AI_METRICS_COLLECTION = "ai_metrics"
 
+_cached_client: AsyncIOMotorClient | None = None
 
-@lru_cache(maxsize=1)
+
 def _client() -> AsyncIOMotorClient:
-    """Return a process-wide Motor client.
+    """Return a process-wide Motor client."""
 
-    Cached so we share a single connection pool across request handlers and
-    background consumers. The client is safe to create at import time because
-    Motor defers actual connection establishment until first use.
-    """
-
-    logger.debug("Creating Motor client for %s", settings.mongo_uri)
-    return AsyncIOMotorClient(settings.mongo_uri)
+    global _cached_client
+    if _cached_client is None:
+        logger.debug("Creating Motor client for %s", settings.mongo_uri)
+        _cached_client = AsyncIOMotorClient(settings.mongo_uri)
+    return _cached_client
 
 
 def get_database() -> AsyncIOMotorDatabase:
@@ -48,7 +46,8 @@ def get_ai_tasks_collection() -> AsyncIOMotorCollection:
 async def close_client() -> None:
     """Close the cached Motor client. Intended for FastAPI shutdown hooks."""
 
-    if _client.cache_info().currsize:
-        _client().close()
-        _client.cache_clear()
+    global _cached_client
+    if _cached_client is not None:
+        _cached_client.close()
+        _cached_client = None
         logger.info("Motor client closed")

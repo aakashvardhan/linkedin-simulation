@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["candidate-ai"])
 
 
+def _principal_can_access_task(principal: Principal, task: AgentTask) -> bool:
+    """Owner or admin may read task details and sensitive fields."""
+
+    if principal.role == "admin":
+        return True
+    if task.task_kind == "member":
+        return principal.subject_id == (task.member_id or "")
+    return principal.subject_id == task.recruiter_id
+
+
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
@@ -73,7 +83,8 @@ class ParseResumeRequest(BaseModel):
     @classmethod
     def _member_id_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None  # required field
+        if result is None:
+            raise ValueError("member_id must not be blank")
         return result
 
     @field_validator("resume_text", "resume_url")
@@ -102,7 +113,8 @@ class MatchCandidatesRequest(BaseModel):
     @classmethod
     def _job_id_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("job_id must not be blank")
         return result
 
 
@@ -116,7 +128,8 @@ class OutreachDraftRequest(BaseModel):
     @classmethod
     def _ids_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("must not be blank")
         return result
 
 
@@ -130,7 +143,8 @@ class HiringAssistantRequest(BaseModel):
     @classmethod
     def _ids_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("must not be blank")
         return result
 
 
@@ -145,7 +159,8 @@ class ApproveOutreachRequest(BaseModel):
     @classmethod
     def _ids_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("must not be blank")
         return result
 
     @field_validator("final_message")
@@ -164,7 +179,8 @@ class CareerCoachRequest(BaseModel):
     @classmethod
     def _ids_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("must not be blank")
         return result
 
 
@@ -180,7 +196,8 @@ class CareerCoachApproveRequest(BaseModel):
     @classmethod
     def _ids_not_blank(cls, value: str) -> str:
         result = _non_blank(value)
-        assert result is not None
+        if result is None:
+            raise ValueError("must not be blank")
         return result
 
     @field_validator("edited_summary")
@@ -233,9 +250,19 @@ def _resume_text_from_request(req: ParseResumeRequest) -> str:
 @router.post("/parse-resume", response_model=ParseResumeResponse)
 async def parse_resume(
     body: ParseResumeRequest,
-    principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(require_member),
 ) -> ParseResumeResponse:
-    """Extract structured fields from a resume."""
+    """Extract structured fields from a resume.
+
+    Callers must use the member role; `member_id` must match the authenticated
+    principal (no parsing another member's resume through this endpoint).
+    """
+
+    if principal.subject_id != body.member_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot parse resume for another member",
+        )
 
     logger.info(
         "parse-resume called member_id=%s actor=%s", body.member_id, principal.subject_id
@@ -243,7 +270,7 @@ async def parse_resume(
     resume_text = _resume_text_from_request(body)
     try:
         parsed = await resume_parser.parse_resume(resume_text)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         # The LLM returned something that wasn't valid JSON (prompt drift,
         # truncation, etc.). Surface this distinctly so clients can retry.
         logger.error("parse-resume JSON error member_id=%s: %s", body.member_id, e)
@@ -350,6 +377,12 @@ async def outreach_draft(
 ) -> dict[str, Any]:
     """Generate a personalized outreach message."""
 
+    if body.recruiter_id != principal.subject_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="recruiter_id does not match authenticated user",
+        )
+
     try:
         job = await job_client.fetch_job(body.job_id)
         member = await profile_client.fetch_member(body.member_id)
@@ -361,7 +394,7 @@ async def outreach_draft(
     return {
         "job_id": body.job_id,
         "member_id": body.member_id,
-        "recruiter_id": body.recruiter_id,
+        "recruiter_id": principal.subject_id,
         "tone": body.tone,
         "draft_message": outreach["draft"],
         "match_score": outreach.get("match_score"),
@@ -385,6 +418,13 @@ async def hiring_assistant(
     can subscribe to progress updates while Kafka drives the pipeline.
     """
 
+    if body.recruiter_id != principal.subject_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="recruiter_id does not match authenticated user",
+        )
+    recruiter_id = principal.subject_id
+
     try:
         await job_client.fetch_job(body.job_id)  # 404 propagates if unknown
     except ServiceError as exc:
@@ -396,7 +436,7 @@ async def hiring_assistant(
     task = AgentTask(
         task_id=task_id,
         trace_id=trace_id,
-        recruiter_id=body.recruiter_id,
+        recruiter_id=recruiter_id,
         job_id=body.job_id,
         top_k=body.top_k,
         generate_outreach=body.generate_outreach,
@@ -408,12 +448,12 @@ async def hiring_assistant(
     envelope = KafkaEnvelope(
         event_type=AIEventType.AI_REQUESTED.value,
         trace_id=trace_id,
-        actor_id=body.recruiter_id,
+        actor_id=recruiter_id,
         entity={"entity_type": AIEntityType.AI_TASK.value, "entity_id": task_id},
         payload={
             "task_id": task_id,
             "job_id": body.job_id,
-            "recruiter_id": body.recruiter_id,
+            "recruiter_id": recruiter_id,
             "top_k": body.top_k,
             "generate_outreach": body.generate_outreach,
         },
@@ -455,6 +495,12 @@ async def get_task(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
+    if not _principal_can_access_task(principal, task):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this task",
+        )
+
     if task.task_kind == "member":
         total_steps = 1
     else:
@@ -494,6 +540,12 @@ async def approve_outreach(
     body: ApproveOutreachRequest,
     principal: Principal = Depends(require_recruiter),
 ) -> dict[str, Any]:
+    if principal.subject_id != body.recruiter_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="recruiter_id does not match authenticated user",
+        )
+
     task = await task_store.get_task(body.task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
@@ -550,7 +602,25 @@ async def approve_outreach(
         payload=approval,
         idempotency_key=f"{body.task_id}:{body.candidate_id}:{body.action.value}",
     )
-    await publish_event(AI_RESULTS_TOPIC, envelope.model_dump(mode="json"))
+    dump = envelope.model_dump(mode="json")
+    try:
+        await publish_event(AI_RESULTS_TOPIC, dump)
+    except Exception as e:
+        logger.error(
+            "Kafka publish failed after task_store.record_approval "
+            "event_type=%s trace_id=%s idempotency_key=%s envelope=%s error=%s",
+            AIEventType.AI_APPROVAL_RECORDED.value,
+            task.trace_id,
+            envelope.idempotency_key,
+            dump,
+            e,
+            exc_info=True,
+        )
+        await task_store.revert_approval_to_awaiting(body.task_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to publish approval event; please retry",
+        ) from e
 
     return {
         "task_id": body.task_id,
@@ -686,7 +756,25 @@ async def approve_career_coach(
         payload=approval,
         idempotency_key=f"{body.task_id}:career_coach:{body.action.value}",
     )
-    await publish_event(AI_RESULTS_TOPIC, envelope.model_dump(mode="json"))
+    dump = envelope.model_dump(mode="json")
+    try:
+        await publish_event(AI_RESULTS_TOPIC, dump)
+    except Exception as e:
+        logger.error(
+            "Kafka publish failed after task_store.record_approval "
+            "event_type=%s trace_id=%s idempotency_key=%s envelope=%s error=%s",
+            AIEventType.AI_APPROVAL_RECORDED.value,
+            task.trace_id,
+            envelope.idempotency_key,
+            dump,
+            e,
+            exc_info=True,
+        )
+        await task_store.revert_approval_to_awaiting(body.task_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to publish approval event; please retry",
+        ) from e
 
     return {
         "task_id": body.task_id,
@@ -704,8 +792,14 @@ async def approve_career_coach(
 @router.post("/career-coach")
 async def run_career_coach(
     body: CareerCoachRequest,
-    principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(require_member),
 ) -> dict[str, Any]:
+    if principal.subject_id != body.member_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot run career coach for another member",
+        )
+
     try:
         member = await profile_client.fetch_member(body.member_id)
         job = await job_client.fetch_job(body.target_job_id)

@@ -2,8 +2,10 @@
 
 Two routers live side-by-side:
 - `/agent/*` (partner's recruiter-facing endpoints, `app.api.routes`)
-- `/ai/*`    (candidate-facing endpoints, `app.api.candidate_routes`, including
-  async Career Coach: `POST /ai/career-coach/kickoff` + HITL `POST /ai/career-coach/approve`)
+- `/ai/*`    (candidate-facing endpoints from `app.api.candidate_routes`, which
+  defines `APIRouter(prefix="/ai")`, so no extra `prefix=` is passed to
+  `include_router`; includes async Career Coach: `POST /ai/career-coach/kickoff`
+  + HITL `POST /ai/career-coach/approve`)
 
 Both share the Kafka producer/consumer, Mongo task store, Redis client, and
 WebSocket hub.
@@ -45,9 +47,15 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     logger.info("Shutting down AI Agent Service")
-    await stop_producer()
-    await close_redis()
-    await close_client()
+    for name, fn in (
+        ("stop_producer", stop_producer),
+        ("close_redis", close_redis),
+        ("close_client", close_client),
+    ):
+        try:
+            await fn()
+        except Exception:
+            logger.exception("Shutdown step %s failed", name)
 
 
 @app.get("/health")

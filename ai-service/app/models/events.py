@@ -2,6 +2,7 @@
 
 import datetime
 import uuid
+from datetime import timezone
 
 from pydantic import BaseModel
 
@@ -19,6 +20,6 @@ class KafkaEnvelope(BaseModel):
         if not self.trace_id:
             self.trace_id = str(uuid.uuid4())
         if not self.timestamp:
-            self.timestamp = datetime.datetime.utcnow().isoformat()
+            self.timestamp = datetime.datetime.now(timezone.utc).isoformat()
         if not self.idempotency_key:
             self.idempotency_key = str(uuid.uuid4())

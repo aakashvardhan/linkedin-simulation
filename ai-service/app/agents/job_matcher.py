@@ -8,8 +8,10 @@ _model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def compute_match_score(job: dict, candidate: dict) -> dict:
-    job_skills = job.get("skills_required", [])
-    cand_skills = candidate.get("skills", [])
+    raw_job_skills = job.get("skills_required", []) or []
+    raw_cand_skills = candidate.get("skills", []) or []
+    job_skills = [str(x) for x in raw_job_skills if x is not None]
+    cand_skills = [str(x) for x in raw_cand_skills if x is not None]
 
     job_text = (
         f"{job.get('title', '')} {job.get('description', '')} {' '.join(job_skills)}"

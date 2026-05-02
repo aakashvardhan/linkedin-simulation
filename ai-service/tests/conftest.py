@@ -82,6 +82,16 @@ class _InMemoryStore:
         self.tasks[task_id] = updated
         return updated
 
+    async def revert_approval_to_awaiting(self, task_id: str) -> AgentTask | None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return None
+        updated = task.model_copy(
+            update={"approval": None, "status": TaskStatus.AWAITING_APPROVAL}
+        )
+        self.tasks[task_id] = updated
+        return updated
+
     async def mark_step_failed(
         self,
         task_id: str,
@@ -119,6 +129,7 @@ def fake_task_store(monkeypatch: pytest.MonkeyPatch) -> _InMemoryStore:
         "append_step",
         "set_result",
         "record_approval",
+        "revert_approval_to_awaiting",
         "mark_step_failed",
     ):
         monkeypatch.setattr(real_task_store, name, getattr(store, name))
@@ -128,6 +139,18 @@ def fake_task_store(monkeypatch: pytest.MonkeyPatch) -> _InMemoryStore:
 # ---------------------------------------------------------------------------
 # Kafka producer stub
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def stub_agent_result_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid Redis when the Kafka consumer persists partner `/agent/result` payloads."""
+
+    async def _noop_set_agent_result(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    from app.kafka import consumer as consumer_module
+
+    monkeypatch.setattr(consumer_module, "set_agent_result", _noop_set_agent_result)
 
 
 @pytest.fixture(autouse=True)

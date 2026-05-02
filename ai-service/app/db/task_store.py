@@ -124,6 +124,23 @@ async def record_approval(
     return _from_document(doc)
 
 
+async def revert_approval_to_awaiting(task_id: str) -> AgentTask | None:
+    """Undo `record_approval` when downstream publish fails (Mongo + Kafka consistency)."""
+
+    doc = await get_ai_tasks_collection().find_one_and_update(
+        {"_id": task_id},
+        {
+            "$set": {
+                "status": TaskStatus.AWAITING_APPROVAL.value,
+                "updated_at": _now().isoformat(),
+            },
+            "$unset": {"approval": ""},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    return _from_document(doc)
+
+
 async def mark_step_failed(
     task_id: str,
     step: StepResult,

@@ -100,5 +100,7 @@ async def push_update(key: str, data: dict) -> None:
             dead.append(websocket)
     for websocket in dead:
         _unregister(key, websocket)
-    if sockets:
-        logger.info("Pushed update to key=%s subscribers=%d", key, len(sockets) - len(dead))
+    remaining = _connections.get(key)
+    remaining_count = len(remaining) if remaining else 0
+    if remaining_count > 0:
+        logger.info("Pushed update to key=%s subscribers=%d", key, remaining_count)

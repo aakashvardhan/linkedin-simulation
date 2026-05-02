@@ -1,18 +1,20 @@
 # REST endpoints (/agent/request, /agent/status)
 
+import hashlib
 import logging
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.auth import Principal, get_principal
+from app.db.agent_result_store import get_agent_result
 from app.kafka.producer import publish_event
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_task_results: dict = {}
 
 class AgentRequest(BaseModel):
     actor_id: str
@@ -60,19 +62,26 @@ async def request_agent(body: AgentRequest) -> dict:
 
 
 @router.post("/approve/{trace_id}")
-async def approve_outreach(trace_id: str, body: ApprovalRequest) -> dict:
+async def approve_outreach(
+    trace_id: str,
+    body: ApprovalRequest,
+    principal: Principal = Depends(get_principal),
+) -> dict:
     if body.action not in ("approve", "edit", "reject"):
         raise HTTPException(
             status_code=400,
             detail="action must be one of: approve, edit, reject",
         )
 
+    actor_id = principal.subject_id
+    idempotency_key = hashlib.sha256(f"{trace_id}:{body.action}".encode()).hexdigest()
+
     await publish_event(
         "ai.results",
         {
             "event_type": "ai.approval.recorded",
             "trace_id": trace_id,
-            "actor_id": "recruiter",
+            "actor_id": actor_id,
             "entity": {
                 "entity_type": "ai_task",
                 "entity_id": trace_id,
@@ -81,14 +90,15 @@ async def approve_outreach(trace_id: str, body: ApprovalRequest) -> dict:
                 "action": body.action,
                 "edited_draft": body.edited_draft,
             },
-            "idempotency_key": str(uuid.uuid4()),
+            "idempotency_key": idempotency_key,
         },
     )
 
     logger.info(
-        "Approval recorded trace_id=%s action=%s",
+        "Approval recorded trace_id=%s action=%s actor_id=%s",
         trace_id,
         body.action,
+        actor_id,
     )
 
     return {
@@ -105,9 +115,17 @@ async def get_status(trace_id: str) -> dict:
         "message": "Connect to /ws/{trace_id} for real-time status updates",
     }
 
+
 @router.get("/result/{trace_id}")
 async def get_result(trace_id: str) -> dict:
-    result = _task_results.get(trace_id)
+    try:
+        result = await get_agent_result(trace_id)
+    except Exception as exc:
+        logger.exception("Failed to load agent result trace_id=%s", trace_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not load task result",
+        ) from exc
     if result is None:
         raise HTTPException(
             status_code=404,

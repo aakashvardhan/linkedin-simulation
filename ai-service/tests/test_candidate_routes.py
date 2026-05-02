@@ -35,7 +35,7 @@ def test_match_candidates_rejects_non_recruiter(client, member_headers) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_resume_happy_path(monkeypatch, client, recruiter_headers) -> None:
+def test_parse_resume_happy_path(monkeypatch, client, member_headers) -> None:
     async def fake_parse(text: str) -> dict[str, Any]:
         return {
             "skills": ["python", "sql"],
@@ -49,22 +49,22 @@ def test_parse_resume_happy_path(monkeypatch, client, recruiter_headers) -> None
 
     response = client.post(
         "/ai/parse-resume",
-        json={"member_id": "m1", "resume_text": "irrelevant"},
-        headers=recruiter_headers,
+        json={"member_id": "member-1", "resume_text": "irrelevant"},
+        headers=member_headers,
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["member_id"] == "m1"
+    assert body["member_id"] == "member-1"
     assert body["parsed"]["skills"] == ["python", "sql"]
     # All four expected fields present -> confidence 1.0
     assert body["confidence_score"] == 1.0
 
 
-def test_parse_resume_requires_text(client, recruiter_headers) -> None:
+def test_parse_resume_requires_text(client, member_headers) -> None:
     response = client.post(
         "/ai/parse-resume",
-        json={"member_id": "m1"},
-        headers=recruiter_headers,
+        json={"member_id": "member-1"},
+        headers=member_headers,
     )
     assert response.status_code == 400
 
@@ -88,7 +88,7 @@ def test_hiring_assistant_creates_task_and_publishes_event(
 
     response = client.post(
         "/ai/hiring-assistant",
-        json={"job_id": "j1", "recruiter_id": "r1", "top_k": 3, "generate_outreach": False},
+        json={"job_id": "j1", "recruiter_id": "recruiter-1", "top_k": 3, "generate_outreach": False},
         headers=recruiter_headers,
     )
     assert response.status_code == 202

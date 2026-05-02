@@ -19,8 +19,8 @@ from aiokafka import AIOKafkaConsumer
 
 from app.agents import career_coach, job_matcher, outreach_drafter
 from app.agents.supervisor import run_hiring_workflow
-from app.api.routes import _task_results
 from app.api.websocket import push_update
+from app.db.agent_result_store import set_agent_result
 from app.clients import job_client, profile_client
 from app.clients.errors import ServiceError
 from app.config import settings
@@ -220,8 +220,7 @@ async def _run_candidate_workflow(event: dict[str, Any]) -> None:
         "outreach_drafts": drafts,
     }
     await task_store.set_result(task_id, result, final_status)
-    # Keep partner's in-memory dict in sync so /agent/result/{trace_id} works.
-    _task_results[event.get("trace_id", task_id)] = result
+    await set_agent_result(event.get("trace_id", task_id), result)
 
     await publish_event(
         AI_RESULTS_TOPIC,
@@ -279,7 +278,7 @@ async def _run_career_coach_workflow(event: dict[str, Any]) -> None:
         )
         await push_update(
             task_id,
-            {"step": StepName.CAREER_COACH.value, "status": TaskStatus.FAILED.value, "progress": 0, "error": error},
+            {"step": StepName.CAREER_COACH.value, "status": StepStatus.FAILED.value, "progress": 0, "error": error},
         )
         return
 
@@ -344,7 +343,7 @@ async def _run_career_coach_workflow(event: dict[str, Any]) -> None:
         **coach_result,
     }
     await task_store.set_result(task_id, result, TaskStatus.AWAITING_APPROVAL)
-    _task_results[event.get("trace_id", task_id)] = result
+    await set_agent_result(event.get("trace_id", task_id), result)
 
     await publish_event(
         AI_RESULTS_TOPIC,
@@ -374,7 +373,7 @@ async def _run_legacy_recruiter_workflow(event: dict[str, Any]) -> None:
 
     trace_id = event.get("trace_id", str(uuid.uuid4()))
     result = await run_hiring_workflow(event.get("payload", {}), trace_id)
-    _task_results[trace_id] = result
+    await set_agent_result(trace_id, result)
     await publish_event(
         AI_RESULTS_TOPIC,
         {

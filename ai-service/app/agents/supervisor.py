@@ -9,6 +9,17 @@ from app.agents.resume_parser import parse_resume
 logger = logging.getLogger(__name__)
 
 
+def _resume_parse_summary(parsed_resume: dict) -> dict:
+    skills = parsed_resume.get("skills") or []
+    education = parsed_resume.get("education") or []
+    return {
+        "skills_count": len(skills) if isinstance(skills, list) else None,
+        "years_experience": parsed_resume.get("years_experience"),
+        "current_title": parsed_resume.get("current_title"),
+        "education_entries": len(education) if isinstance(education, list) else None,
+    }
+
+
 async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
     job = task.get("job", {})
     resume_text = task.get("resume_text", "")
@@ -33,8 +44,13 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
             }
         )
         logger.info("trace_id=%s step=resume_parser status=completed", trace_id)
-        logger.info("trace_id=%s resume_parsed=%s", trace_id, parsed_resume)
-    except json.JSONDecodeError as e:
+        logger.info(
+            "trace_id=%s resume_parsed_summary=%s",
+            trace_id,
+            _resume_parse_summary(parsed_resume),
+        )
+        logger.debug("trace_id=%s resume_parsed_full=%s", trace_id, parsed_resume)
+    except (json.JSONDecodeError, ValueError) as e:
         logger.error("trace_id=%s step=resume_parser error=%s", trace_id, str(e))
         results["steps"].append(
             {
@@ -73,7 +89,7 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
             trace_id,
             match.get("score"),
         )
-        logger.info("trace_id=%s match_scored=%s", trace_id, match)
+        logger.debug("trace_id=%s match_scored=%s", trace_id, match)
     except Exception as e:
         logger.error("trace_id=%s step=job_matcher error=%s", trace_id, str(e))
         results["steps"].append(
@@ -100,7 +116,7 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
         logger.info(
             "trace_id=%s step=outreach_drafter status=awaiting_approval", trace_id
         )
-        logger.info("trace_id=%s outreach_draft=%s", trace_id, outreach)
+        logger.debug("trace_id=%s outreach_draft=%s", trace_id, outreach)
     except Exception as e:
         logger.error("trace_id=%s step=outreach_drafter error=%s", trace_id, str(e))
         results["steps"].append(

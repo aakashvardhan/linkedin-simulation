@@ -8,6 +8,7 @@ handlers can translate upstream failures into the correct HTTP status via
 from __future__ import annotations
 
 import functools
+import json
 import logging
 from typing import Awaitable, Callable, TypeVar
 
@@ -41,7 +42,7 @@ def raise_for_status(response: httpx.Response, *, service: str) -> None:
         return
     try:
         detail = response.json().get("detail", response.text)
-    except ValueError:
+    except json.JSONDecodeError:
         detail = response.text
     raise ServiceError(
         status_code=response.status_code,
@@ -80,8 +81,7 @@ def wrap_http_errors(service: str) -> Callable[[Callable[..., Awaitable[T]]], Ca
                     service=service,
                     detail="Upstream transport error",
                 ) from exc
-            except ValueError as exc:
-                # `response.json()` raises ValueError on malformed bodies.
+            except json.JSONDecodeError as exc:
                 logger.warning("%s service malformed response: %s", service, exc)
                 raise ServiceError(
                     status_code=502,

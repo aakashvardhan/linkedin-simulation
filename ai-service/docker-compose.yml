@@ -11,6 +11,12 @@ services:
     container_name: ai_kafka
     depends_on:
       - zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
     ports:
       - "9093:9093"
     environment:
@@ -24,6 +30,12 @@ services:
   mongodb:
     image: mongo:7
     container_name: ai_mongo
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     ports:
       - "27017:27017"
     volumes:
@@ -32,6 +44,12 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ai_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     ports:
       - "6379:6379"
 
@@ -43,9 +61,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - kafka
-      - mongodb
-      - redis
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP: ai_kafka:9092
       MONGO_URI: mongodb://ai_mongo:27017

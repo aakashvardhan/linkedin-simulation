@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from urllib.parse import urlparse, urlunparse
 
 from redis.asyncio import Redis
 
@@ -19,6 +20,18 @@ logger = logging.getLogger(__name__)
 REDIS_KEY_PREFIX = "ai_service:"
 
 
+def _redacted_redis_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return url
+    netloc = parsed.netloc
+    if "@" in netloc:
+        host_part = netloc.rsplit("@", 1)[-1]
+        netloc = f"REDACTED@{host_part}"
+    safe = parsed._replace(netloc=netloc)
+    return urlunparse(safe)
+
+
 @lru_cache(maxsize=1)
 def _redis() -> Redis:
     """Return a process-wide asyncio Redis client.
@@ -27,7 +40,7 @@ def _redis() -> Redis:
     opened lazily on first command.
     """
 
-    logger.debug("Creating Redis client for %s", settings.redis_url)
+    logger.debug("Creating Redis client for %s", _redacted_redis_url(settings.redis_url))
     return Redis.from_url(settings.redis_url, decode_responses=True)
 
 

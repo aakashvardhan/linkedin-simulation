@@ -95,7 +95,7 @@
 - [ ] Orchestrate multi-step pipeline:
   1. Call Resume Parser for all candidates
   2. Call Job–Candidate Matching
-  3. If `generate_outreach=true`, call Outreach Draft for top-k
+  3. If `generate_outreach=true`, call Outreach Draft for top-k (Outreach Draft skill is scheduled in W4 alongside Hiring Assistant so this dependency is satisfied)
 - [ ] Maintain `trace_id` across all steps
 - [ ] Update task status in MongoDB at each step
 - [ ] Push progress via WebSocket at each step transition
@@ -154,8 +154,8 @@
 | Week | Focus |
 |------|-------|
 | W3 | Scaffolding (2.1), Resume Parser (2.2), Match Candidates (2.3), CI basics (1.1, 1.2) |
-| W4 | Kafka consumer (2.6), Hiring Assistant (2.5), WebSocket (2.9), CI integration tests (1.3) |
-| W5 | Outreach Draft (2.4), Approve (2.8), Task Status (2.7), Metrics (Part 3), branch protection (1.4) |
+| W4 | Kafka consumer (2.6), Outreach Draft (2.4), Hiring Assistant (2.5), WebSocket (2.9), CI integration tests (1.3) |
+| W5 | Approve (2.8), Task Status (2.7), Metrics (Part 3), branch protection (1.4) |
 | W6 | Career Coach (2.10), testing (Part 4), deployment step (1.6), stabilize |
 
 ---
@@ -217,7 +217,7 @@ Running log of what is already implemented on `feature/candidate-ai-service`, wh
 - **Auth (R1):** bearer-token stub, see above.
 - **LLM calls (resume_parser / outreach_drafter / career_coach):** require `GROQ_API_KEY`. Until the key is set, endpoints that hit the LLM will fail at runtime. Tests will mock the Groq client; integration environment must have the key configured before smoke tests run.
 - **Downstream services:** `profile_client` / `job_client` / `messaging_client` assume paths `/members/{id}`, `/members/candidates`, `/jobs/{id}`, `/messages/send` — confirm and adjust once the partner teams publish their OpenAPI specs.
-- **`app/api/routes.py` `_task_results` dict:** partner's in-memory store is used by `GET /agent/result/{trace_id}`. Our new Mongo-backed `task_store` does not replace it yet; when the branches merge, migrate `/agent/result` to read from `task_store` and delete the dict.
+- **`GET /agent/result/{trace_id}`:** results are stored in Redis via `app.db.agent_result_store` (TTL, shared across workers); Kafka consumer writes after workflow completion.
 - **Container port:** docker-compose exposes `8000`; PLAN.md originally said `8007`. Host-level mapping will redirect 8007 → 8000 until port is harmonized across services.
 - **Redis:** partner included `redis_client.py` as a stub. Not used yet. Decide per-use-case (rate limiting? idempotency cache in front of Mongo?) before enabling.
 - **Supervisor (`app/agents/supervisor.py`):** returns in-memory results only; does not yet persist step transitions via `task_store`. Being extended under 2.6.

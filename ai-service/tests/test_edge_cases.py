@@ -1,7 +1,7 @@
 """Regression tests for edge-case hardening.
 
 Groups:
-- Input validation: whitespace-only fields return 400.
+- Input validation: whitespace-only fields return 422.
 - Approval state machine: 409 on wrong status / duplicate.
 - Downstream failures: ServiceError translation (502 / 504 / preserved 4xx).
 - LLM resilience: invalid JSON from parser surfaces a clear 502.
@@ -35,8 +35,8 @@ from app.models.task import AgentTask, TaskStatus
         {"member_id": "", "resume_text": "ok"},
     ],
 )
-def test_parse_resume_rejects_whitespace_only(client, recruiter_headers, body) -> None:
-    response = client.post("/ai/parse-resume", json=body, headers=recruiter_headers)
+def test_parse_resume_rejects_whitespace_only(client, member_headers, body) -> None:
+    response = client.post("/ai/parse-resume", json=body, headers=member_headers)
     assert response.status_code == 422  # Pydantic validation error
 
 
@@ -146,7 +146,7 @@ def test_hiring_assistant_returns_404_when_job_not_found(
 
     response = client.post(
         "/ai/hiring-assistant",
-        json={"job_id": "missing", "recruiter_id": "r1", "top_k": 3},
+        json={"job_id": "missing", "recruiter_id": "recruiter-1", "top_k": 3},
         headers=recruiter_headers,
     )
     assert response.status_code == 404
@@ -196,7 +196,7 @@ def test_wrap_http_errors_translates_timeout_to_service_error(monkeypatch) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_parse_resume_502_on_invalid_json(monkeypatch, client, recruiter_headers) -> None:
+def test_parse_resume_502_on_invalid_json(monkeypatch, client, member_headers) -> None:
     import json
 
     async def bad_json(text: str) -> dict[str, Any]:
@@ -207,15 +207,15 @@ def test_parse_resume_502_on_invalid_json(monkeypatch, client, recruiter_headers
 
     response = client.post(
         "/ai/parse-resume",
-        json={"member_id": "m1", "resume_text": "ignored"},
-        headers=recruiter_headers,
+        json={"member_id": "member-1", "resume_text": "ignored"},
+        headers=member_headers,
     )
     assert response.status_code == 502
     assert "invalid JSON" in response.json()["detail"]
 
 
 def test_parse_resume_502_on_unexpected_shape(
-    monkeypatch, client, recruiter_headers
+    monkeypatch, client, member_headers
 ) -> None:
     async def wrong_shape(text: str) -> list:
         return ["not", "a", "dict"]
@@ -225,8 +225,8 @@ def test_parse_resume_502_on_unexpected_shape(
 
     response = client.post(
         "/ai/parse-resume",
-        json={"member_id": "m1", "resume_text": "ignored"},
-        headers=recruiter_headers,
+        json={"member_id": "member-1", "resume_text": "ignored"},
+        headers=member_headers,
     )
     assert response.status_code == 502
 
@@ -251,7 +251,7 @@ def test_hiring_assistant_rolls_task_to_failed_on_kafka_error(
 
     response = client.post(
         "/ai/hiring-assistant",
-        json={"job_id": "j1", "recruiter_id": "r1", "top_k": 3},
+        json={"job_id": "j1", "recruiter_id": "recruiter-1", "top_k": 3},
         headers=recruiter_headers,
     )
     assert response.status_code == 502

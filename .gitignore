@@ -9,5 +9,5 @@ __pycache__/
 .cursor/rules
 .cursor
 .claude
-..gitignore.un~
+*.un~
 .flake8
