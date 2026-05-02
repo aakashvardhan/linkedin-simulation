@@ -287,8 +287,8 @@ const RecruiterJobs = () => {
       </div>
 
       {/* Recruiter Copilot Sidebar (Right 30%) */}
-      <div className="card" style={{ width: '350px', height: 'fit-content', border: '2px solid #8f5849', maxHeight: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
-         <div style={{ backgroundColor: '#8f5849', color: '#fff', padding: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div className="card" style={{ width: '350px', height: 'fit-content', border: '2px solid #0A66C2', maxHeight: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
+         <div style={{ background: 'linear-gradient(165deg, #378fe9 0%, #0A66C2 55%, #0a58ad 100%)', color: '#fff', padding: '16px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.2)' }}>
             <FaRobot size={24} />
             <span style={{ fontSize: '16px', fontWeight: '600', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               Agentic Copilot{selectedJobForMatching ? ` — ${selectedJobForMatching.title}` : ''}
@@ -304,7 +304,7 @@ const RecruiterJobs = () => {
 
             {copilotState === 'idle' && (
               <div style={{ textAlign: 'center', padding: '24px 8px', color: '#666' }}>
-                <FaRobot size={32} style={{ color: '#8f5849', marginBottom: '12px' }} />
+                <FaRobot size={32} style={{ color: '#0A66C2', marginBottom: '12px' }} />
                 <p style={{ fontSize: '14px', lineHeight: '1.5' }}>
                   Click <strong>&ldquo;Find Candidates&rdquo;</strong> on any job posting to discover top-matched candidates with personalized outreach drafts.
                 </p>

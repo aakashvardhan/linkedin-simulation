@@ -17,6 +17,75 @@ const MockDataContext = createContext();
 
 export const useMockData = () => useContext(MockDataContext);
 
+function envFlag(name, defaultValue = false) {
+  const v = import.meta.env?.[name];
+  if (v === undefined || v === null || v === '') return defaultValue;
+  return String(v).toLowerCase() === 'true' || v === '1';
+}
+
+/** When true, opt into extra backend hydration calls after login (best-effort). */
+const BACKEND_INTEGRATION = envFlag('VITE_BACKEND_INTEGRATION', false);
+/** When true, login must succeed against backend auth (no silent demo login). */
+const REQUIRE_BACKEND_AUTH = envFlag('VITE_REQUIRE_BACKEND_AUTH', false);
+/** When false, disables DummyJSON + extra seed merges for cleaner integration runs. */
+const DEMO_SEED_ENABLED = import.meta.env.VITE_DEMO_SEED !== 'false';
+/** When true, hydration replaces seeded jobs instead of merging. */
+const REPLACE_SEED_JOBS = envFlag('VITE_REPLACE_SEED_JOBS', false);
+
+function resolveMemberKey(profile) {
+  if (!profile) return 'me';
+  const id =
+    profile.member_id ??
+    profile.memberId ??
+    profile.user_id ??
+    profile.userId ??
+    profile.id ??
+    profile.uuid;
+  if (id !== undefined && id !== null && String(id).trim() !== '') return id;
+  if (profile.email) return profile.email;
+  return 'me';
+}
+
+function extractJobsArray(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.jobs)) return payload.jobs;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.results)) return payload.results;
+  if (Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+function mapBackendJobRow(raw, idx) {
+  const id = raw?.id ?? raw?.job_id ?? raw?.jobId ?? `job-${idx}`;
+  const title = raw?.title ?? raw?.job_title ?? 'Untitled role';
+  const company = raw?.company ?? raw?.company_name ?? raw?.employer ?? 'Company';
+  const location = raw?.location ?? raw?.city ?? '';
+  const type = raw?.type ?? raw?.employment_type ?? raw?.employmentType ?? 'Full-time';
+  const remote =
+    typeof raw?.remote === 'boolean'
+      ? raw.remote
+      : String(raw?.work_mode || raw?.remote_policy || '').toLowerCase().includes('remote');
+  const industry = raw?.industry ?? raw?.sector ?? '';
+  const description =
+    raw?.description ?? raw?.summary ?? raw?.details ?? raw?.job_description ?? '';
+  const applicants = Number(raw?.applicants ?? raw?.applicant_count ?? raw?.applications_count ?? 0) || 0;
+  const hasApplied = !!(raw?.hasApplied ?? raw?.has_applied ?? raw?.applied);
+
+  return {
+    id,
+    title,
+    company,
+    location,
+    type,
+    remote,
+    industry,
+    description,
+    applicants,
+    hasApplied,
+  };
+}
+
 /** Demo accounts for local UI (password can be anything in demo fallback). */
 export const DEMO_MEMBER_EMAIL = 'pratiksha@demo.linkdln';
 export const DEMO_RECRUITER_EMAIL = 'sneha@demo.linkdln';
@@ -102,6 +171,8 @@ export const MockDataProvider = ({ children }) => {
     }
   });
   const api = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
+
+  const memberKey = useMemo(() => resolveMemberKey(userProfile), [userProfile]);
 
   useEffect(() => {
     if (userRole) localStorage.setItem('userRole', userRole);
@@ -257,9 +328,45 @@ export const MockDataProvider = ({ children }) => {
     });
   }, [jobs]);
 
+  /** Optional: hydrate jobs list from backend gateway after login (integration runs). */
+  useEffect(() => {
+    if (!BACKEND_INTEGRATION) return undefined;
+    if (!userRole || !authToken) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        let payload = { query: '', limit: 200 };
+        if (userRole === 'RECRUITER' && userProfile?.email) {
+          payload = { ...payload, recruiter_email: userProfile.email };
+        }
+
+        const res = await api.jobs.search(payload);
+        if (cancelled) return;
+
+        const rows = extractJobsArray(res).map((r, idx) => mapBackendJobRow(r, idx));
+        if (!rows.length) return;
+
+        setJobs((prev) => {
+          if (REPLACE_SEED_JOBS) return rows;
+          const map = new Map();
+          for (const j of prev) map.set(String(j.id), j);
+          for (const j of rows) map.set(String(j.id), j);
+          return Array.from(map.values());
+        });
+      } catch {
+        // keep seeded/mock jobs if backend search differs or gateway is down
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authToken, userProfile?.email, userRole]);
+
   /** Merge DummyJSON + optional VITE_EXTRA_SEED_URL (e.g. Kaggle export hosted as JSON). */
   useEffect(() => {
-    if (import.meta.env.VITE_OPEN_SEED === 'false') return undefined;
+    if (!DEMO_SEED_ENABLED || import.meta.env.VITE_OPEN_SEED === 'false') return undefined;
     let cancelled = false;
 
     (async () => {
@@ -308,7 +415,7 @@ export const MockDataProvider = ({ children }) => {
         { name: 'San Francisco', value: 450, color: '#0A66C2' },
         { name: 'New York', value: 300, color: '#004182' },
         { name: 'Seattle', value: 200, color: '#c37d16' },
-        { name: 'Austin', value: 150, color: '#8f5849' },
+        { name: 'Austin', value: 150, color: '#378fe9' },
         { name: 'Chicago', value: 100, color: '#b24020' },
       ],
       lowTractionJobs: [
@@ -347,7 +454,7 @@ export const MockDataProvider = ({ children }) => {
       profileViewsLast30Days: views,
       applicationStatusBreakdown: [
         { name: 'Offer', value: 1, color: '#004182' },
-        { name: 'Interview', value: 1, color: '#8f5849' },
+        { name: 'Interview', value: 1, color: '#378fe9' },
         { name: 'Reviewing', value: 2, color: '#c37d16' },
         { name: 'Submitted', value: 2, color: '#0A66C2' },
         { name: 'Rejected', value: 1, color: '#cc0000' },
@@ -377,9 +484,10 @@ export const MockDataProvider = ({ children }) => {
     }
   };
 
-  const getMemberAnalytics = async ({ member_id = 'me', window = '30d' } = {}) => {
+  const getMemberAnalytics = async ({ member_id, window = '30d' } = {}) => {
     try {
-      const res = await api.analytics.memberDashboard({ member_id, window });
+      const mid = member_id ?? memberKey;
+      const res = await api.analytics.memberDashboard({ member_id: mid, window });
       return {
         profileViewsLast30Days: res?.profile_views_series || demoMemberAnalytics.profileViewsLast30Days,
         applicationStatusBreakdown: res?.application_status_breakdown || demoMemberAnalytics.applicationStatusBreakdown,
@@ -419,7 +527,7 @@ export const MockDataProvider = ({ children }) => {
         event_type: isArticle ? 'article.created' : 'post.created',
         trace_id: crypto.randomUUID?.() || String(Date.now()),
         timestamp: new Date().toISOString(),
-        actor_id: 'me',
+        actor_id: String(memberKey),
         entity: { entity_type: 'post', entity_id: String(newPost.id) },
         payload: { content: text, has_image: !!image, is_article: isArticle },
         idempotency_key: crypto.randomUUID?.() || String(Date.now()),
@@ -686,7 +794,7 @@ export const MockDataProvider = ({ children }) => {
     try {
       await api.applications.submit({
         job_id: jobId,
-        member_id: 'me',
+        member_id: memberKey,
         resume_text,
         cover_letter,
       });
@@ -712,7 +820,7 @@ export const MockDataProvider = ({ children }) => {
       prev.map((c) => (c.id === userId ? { ...c, status: 'pending' } : c)),
     );
     try {
-      await api.connections.request({ requester_id: 'me', receiver_id: userId });
+      await api.connections.request({ requester_id: memberKey, receiver_id: userId });
     } catch {
       // ignore for now
     }
@@ -806,17 +914,44 @@ export const MockDataProvider = ({ children }) => {
   }, [clearMemberStoredProfile]);
 
   const login = async (role, { email, password, displayName: explicitDisplayName } = {}) => {
-    // Try backend auth first; fallback to local demo login.
+    let authRes = null;
     try {
-      const res = await api.auth.login({ role, email, password });
-      if (res?.token) setAuthToken(res.token);
-    } catch {
-      // demo mode
+      authRes = await api.auth.login({ role, email, password });
+    } catch (err) {
+      if (REQUIRE_BACKEND_AUTH) {
+        throw err;
+      }
+      authRes = null;
+    }
+
+    const token =
+      authRes?.token ||
+      authRes?.access_token ||
+      authRes?.accessToken ||
+      authRes?.jwt ||
+      authRes?.data?.token ||
+      null;
+    if (token) setAuthToken(token);
+
+    if (REQUIRE_BACKEND_AUTH && !token) {
+      const msg = authRes?.message || authRes?.error || 'Login failed';
+      throw new Error(typeof msg === 'string' ? msg : 'Login failed');
     }
 
     const resolvedEmail =
       (email || '').trim() ||
+      authRes?.email ||
+      authRes?.user?.email ||
       (role === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL);
+
+    let me = null;
+    if (token) {
+      try {
+        me = await api.auth.me();
+      } catch {
+        me = null;
+      }
+    }
 
     let prev = null;
     try {
@@ -834,6 +969,15 @@ export const MockDataProvider = ({ children }) => {
 
     let displayName = (explicitDisplayName || '').trim();
     if (!displayName) {
+      displayName =
+        (me?.displayName ||
+          me?.name ||
+          me?.full_name ||
+          me?.user?.displayName ||
+          authRes?.displayName ||
+          '').trim();
+    }
+    if (!displayName) {
       if (sameUser && prev.displayName) displayName = prev.displayName;
       else if (String(resolvedEmail).toLowerCase() === DEMO_MEMBER_EMAIL.toLowerCase()) displayName = DEMO_MEMBER_NAME;
       else if (String(resolvedEmail).toLowerCase() === DEMO_RECRUITER_EMAIL.toLowerCase()) displayName = DEMO_RECRUITER_NAME;
@@ -843,11 +987,27 @@ export const MockDataProvider = ({ children }) => {
     const headline =
       sameUser && prev.headline
         ? prev.headline
-        : role === 'RECRUITER'
-          ? 'Recruiting & talent · linkedlnDS'
-          : 'Professional · Edit your profile to add a headline';
+        : (me?.headline || me?.title || authRes?.headline || '').trim() ||
+          (role === 'RECRUITER'
+            ? 'Recruiting & talent · linkedlnDS'
+            : 'Professional · Edit your profile to add a headline');
 
-    setUserProfile({ displayName, email: resolvedEmail, role, headline });
+    const idPatch =
+      me?.id != null
+        ? { id: me.id }
+        : authRes?.user?.id != null
+          ? { id: authRes.user.id }
+          : {};
+    const memberPatch =
+      me?.member_id != null
+        ? { member_id: me.member_id }
+        : me?.memberId != null
+          ? { member_id: me.memberId }
+          : authRes?.member_id != null
+            ? { member_id: authRes.member_id }
+            : {};
+
+    setUserProfile({ displayName, email: resolvedEmail, role, headline, ...idPatch, ...memberPatch });
     setUserRole(role);
   };
 

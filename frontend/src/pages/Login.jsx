@@ -135,11 +135,15 @@ const Login = () => {
       }
     }
 
-    await login(authRole, {
-      email,
-      password,
-      ...(mode === 'signup' ? { displayName: fullName.trim() } : {}),
-    });
+    try {
+      await login(authRole, {
+        email,
+        password,
+        ...(mode === 'signup' ? { displayName: fullName.trim() } : {}),
+      });
+    } catch (err) {
+      setFormError(err?.message || 'Could not authenticate with the backend. Check VITE_API_BASE_URL and auth endpoints.');
+    }
   };
 
   return (
@@ -263,7 +267,7 @@ const Login = () => {
             style={{
               fontSize: '56px',
               fontWeight: '200',
-              color: '#8f5849',
+              color: '#0A66C2',
               lineHeight: '1.2',
               marginBottom: '18px',
             }}

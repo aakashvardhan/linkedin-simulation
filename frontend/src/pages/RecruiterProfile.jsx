@@ -97,7 +97,7 @@ const RecruiterProfile = () => {
       
       {/* Hero Header */}
       <div className="card">
-        <div style={{ height: '160px', backgroundColor: '#8f5849', position: 'relative', borderRadius: '8px 8px 0 0' }}>
+        <div style={{ height: '160px', background: 'linear-gradient(165deg, #378fe9 0%, #0A66C2 55%, #0a58ad 100%)', position: 'relative', borderRadius: '8px 8px 0 0' }}>
           <div
             style={{
               position: 'absolute',

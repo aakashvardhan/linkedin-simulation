@@ -20,6 +20,14 @@ cp .env.example .env
 
 By default, `VITE_API_BASE_URL` is `http://localhost:8080`.
 
+### Backend integration (read this first)
+
+See **`BACKEND_INTEGRATION.md`** for:
+
+- required env toggles (`VITE_BACKEND_INTEGRATION`, `VITE_REQUIRE_BACKEND_AUTH`, seed controls)
+- auth token + `/auth/me` enrichment expectations
+- identifier rules (`member_id` vs email fallback)
+
 ```bash
 cd frontend
 npm install

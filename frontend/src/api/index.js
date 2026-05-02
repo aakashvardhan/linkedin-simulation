@@ -61,6 +61,7 @@ export function makeApi({ getAuthToken } = {}) {
       request: (payload) => api.post('/ai/request', payload),
       status: (payload) => api.post('/ai/status', payload),
       candidateMatch: (payload) => api.post('/ai/candidate-match', payload),
+      careerCoach: (payload) => api.post('/ai/career-coach', payload),
     },
   };
 }

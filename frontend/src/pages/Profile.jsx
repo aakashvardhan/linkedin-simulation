@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RightSidebar from '../components/RightSidebar';
 import {
@@ -26,6 +26,7 @@ import {
   memberProfilePhotoKey,
   notifyProfilePhotoUpdated,
 } from '../context/MockDataContext';
+import CareerCoachPanel from '../components/CareerCoachPanel';
 
 const EXTRA_SECTIONS_STORAGE = (email) => `linkdln:memberExtraSections:${email || 'me'}`;
 
@@ -76,7 +77,14 @@ const SECTION_CATALOG = [
 
 const Profile = () => {
   const navigate = useNavigate();
-  const { getMemberAnalytics, userProfile, updateUserProfile, deleteMemberProfile } = useMockData();
+  const {
+    getMemberAnalytics,
+    userProfile,
+    updateUserProfile,
+    deleteMemberProfile,
+    jobs,
+    authToken,
+  } = useMockData();
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [viewData, setViewData] = useState([]);
   const [appStatusData, setAppStatusData] = useState([]);
@@ -105,6 +113,20 @@ const Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState(profile);
   const [showAddSectionModal, setShowAddSectionModal] = useState(false);
+
+  const careerCoachSeedText = useMemo(
+    () =>
+      [
+        profile.headline,
+        profile.about,
+        profile.skills,
+        (profile.experience || []).map((e) => `${e.title} ${e.company}`).join(' '),
+        (profile.education || []).map((e) => `${e.degree} ${e.school}`).join(' '),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    [profile.headline, profile.about, profile.skills, profile.experience, profile.education]
+  );
 
   const persistExtraSections = useCallback((email, sections) => {
     const key = EXTRA_SECTIONS_STORAGE(email);
@@ -256,7 +278,7 @@ const Profile = () => {
   useEffect(() => {
     let cancelled = false;
     setAnalyticsLoading(true);
-    getMemberAnalytics({ member_id: 'me', window: '30d' })
+    getMemberAnalytics({ window: '30d' })
       .then((res) => {
         if (cancelled) return;
         setViewData(res.profileViewsLast30Days || []);
@@ -403,6 +425,17 @@ const Profile = () => {
             </div>
           </div>
         </div>
+
+        <CareerCoachPanel
+          authToken={authToken}
+          userProfile={userProfile}
+          jobs={jobs}
+          showJobPicker
+          seedResumeText={careerCoachSeedText}
+          profileHeadline={profile.headline}
+          profileAbout={profile.about}
+          profileSkills={profile.skills}
+        />
 
         {(profile.extraSections || []).map((sec) => {
           const meta = SECTION_CATALOG.find((c) => c.type === sec.type);
