@@ -1,0 +1,15 @@
+# Aligns with .flake8 (88 cols, Black-compatible ignores).
+line-length = 88
+target-version = "py311"
+
+exclude = [
+    ".venv",
+    "ai-service/.venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[lint]
+# E203: whitespace before ':' (Black slice notation). Flake8's W503 has no Ruff equivalent.
+ignore = ["E203"]

@@ -5,7 +5,8 @@ Two routers live side-by-side:
 - `/ai/*`    (candidate-facing endpoints, `app.api.candidate_routes`, including
   async Career Coach: `POST /ai/career-coach/kickoff` + HITL `POST /ai/career-coach/approve`)
 
-Both share the Kafka producer/consumer, Mongo task store, and WebSocket hub.
+Both share the Kafka producer/consumer, Mongo task store, Redis client, and
+WebSocket hub.
 """
 
 import asyncio
@@ -17,6 +18,7 @@ from app.api.candidate_routes import router as candidate_router
 from app.api.routes import router
 from app.api.websocket import ws_router
 from app.db.mongo import close_client
+from app.db.redis_client import close_redis
 from app.kafka.consumer import start_consumer
 from app.kafka.producer import stop_producer
 
@@ -44,6 +46,7 @@ async def startup() -> None:
 async def shutdown() -> None:
     logger.info("Shutting down AI Agent Service")
     await stop_producer()
+    await close_redis()
     await close_client()
 
 
