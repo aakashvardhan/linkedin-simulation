@@ -148,6 +148,95 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
             await _emit_progress()
             continue
 
+        ranking_explanation: dict[str, Any] | None = None
+        interview_questions: dict[str, Any] | None = None
+
+        # Step B1 — Explain match ranking (transparency for recruiter review)
+        try:
+            await _set_status(
+                "in_progress",
+                extra={"current_step": "ranking_explained", "candidate_id": candidate_id},
+            )
+            ranking_explanation = await _post_with_retries(
+                f"{settings.ranking_explainer_url}/run",
+                {"job": job, "candidate": parsed_resume, "match": match},
+                timeout_s=45.0,
+                retries=3,
+            )
+            await add_step(
+                trace_id=trace_id,
+                step="ranking_explained",
+                status="completed",
+                data={"candidate_id": candidate_id, "ranking_explanation": ranking_explanation},
+            )
+            results["steps"].append(
+                {"step": "ranking_explained", "status": "completed", "data": {"candidate_id": candidate_id}}
+            )
+            await _emit_progress()
+        except Exception as e:
+            ranking_explanation = {"error": str(e)}
+            await add_step(
+                trace_id=trace_id,
+                step="ranking_explained",
+                status="failed",
+                error=str(e),
+                data={"candidate_id": candidate_id},
+            )
+            results["steps"].append(
+                {
+                    "step": "ranking_explained",
+                    "status": "failed",
+                    "error": str(e),
+                    "data": {"candidate_id": candidate_id},
+                }
+            )
+            await _emit_progress()
+
+        # Step B2 — Interview questions from skill gaps (technical + behavioral)
+        try:
+            await _set_status(
+                "in_progress",
+                extra={"current_step": "interview_questions_generated", "candidate_id": candidate_id},
+            )
+            interview_questions = await _post_with_retries(
+                f"{settings.interview_questions_url}/run",
+                {"job": job, "candidate": parsed_resume, "match": match},
+                timeout_s=45.0,
+                retries=3,
+            )
+            await add_step(
+                trace_id=trace_id,
+                step="interview_questions_generated",
+                status="completed",
+                data={"candidate_id": candidate_id, "interview_questions": interview_questions},
+            )
+            results["steps"].append(
+                {
+                    "step": "interview_questions_generated",
+                    "status": "completed",
+                    "data": {"candidate_id": candidate_id},
+                }
+            )
+            await _emit_progress()
+        except Exception as e:
+            interview_questions = {"error": str(e)}
+            await add_step(
+                trace_id=trace_id,
+                step="interview_questions_generated",
+                status="failed",
+                error=str(e),
+                data={"candidate_id": candidate_id},
+            )
+            results["steps"].append(
+                {
+                    "step": "interview_questions_generated",
+                    "status": "failed",
+                    "error": str(e),
+                    "data": {"candidate_id": candidate_id},
+                }
+            )
+            await _emit_progress()
+
         # Step C — Generate outreach draft
         try:
             await _set_status("in_progress", extra={"current_step": "outreach_drafted", "candidate_id": candidate_id})
@@ -200,6 +289,8 @@ async def run_hiring_workflow(task: dict, trace_id: str) -> dict:
                 "match": match,
                 "match_score": match_score,
                 "match_tier": match_tier,
+                "ranking_explanation": ranking_explanation,
+                "interview_questions": interview_questions,
                 "outreach": outreach,
             }
         )

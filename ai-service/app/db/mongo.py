@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any
+from typing import Any, Callable
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -147,6 +147,53 @@ async def count_distinct_candidate_approvals(trace_id: str) -> int:
     return int(rows[0].get("n", 0) or 0)
 
 
+def _preview_ranking_from_steps(
+    raw_steps: list[dict[str, Any]],
+    *,
+    tier_fn: Callable[[Any], str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """
+    While the supervisor is still running (no candidates_ranked step yet), derive a
+    leaderboard from the latest completed match_scored step per candidate_id.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for s in raw_steps:
+        if s.get("step") != "match_scored" or s.get("status") != "completed":
+            continue
+        data = s.get("data") if isinstance(s.get("data"), dict) else {}
+        cid = data.get("candidate_id")
+        if not cid:
+            continue
+        match = data.get("match") if isinstance(data.get("match"), dict) else {}
+        score = match.get("score") if match else data.get("match_score")
+        tier = tier_fn(score)
+        latest[str(cid)] = {
+            "candidate_id": cid,
+            "match_score": score,
+            "match_tier": tier,
+            "skills_overlap": match.get("skills_overlap") or [],
+        }
+    if not latest:
+        return [], {}
+    ordered = sorted(latest.values(), key=lambda x: float(x.get("match_score") or 0), reverse=True)
+    tier_counts: dict[str, int] = {"strong": 0, "good": 0, "weak": 0, "irrelevant": 0}
+    for i, row in enumerate(ordered):
+        row["rank"] = i + 1
+        row["score_pct"] = int(round(float(row.get("match_score") or 0) * 100))
+        t = str(row.get("match_tier") or "irrelevant")
+        if t in tier_counts:
+            tier_counts[t] += 1
+    preview_stats = {
+        "partial": True,
+        "candidates_scored": len(ordered),
+        "strong_count": tier_counts["strong"],
+        "good_count": tier_counts["good"],
+        "weak_count": tier_counts["weak"],
+        "irrelevant_count": tier_counts["irrelevant"],
+    }
+    return ordered, preview_stats
+
+
 async def get_latest_result(trace_id: str) -> dict[str, Any] | None:
     trace = await get_trace(trace_id)
     if trace is None:
@@ -190,21 +237,46 @@ async def get_latest_result(trace_id: str) -> dict[str, Any] | None:
             outreach = c.get("outreach") or {}
             score = c.get("match_score")
             tier = _tier_from_score(score)
-            out.append(
-                {
-                    "rank": i + 1,
-                    "candidate_id": c.get("candidate_id"),
-                    "match_score": score,
-                    "score_pct": int(round(float(score or 0) * 100)),
-                    "match_tier": tier,
-                    "skills_overlap": match.get("skills_overlap") or [],
-                    "outreach": {
-                        "draft": outreach.get("draft"),
-                        "status": outreach.get("status"),
-                        "requires_human_review": outreach.get("requires_human_review", True),
-                    },
-                }
-            )
+            re = c.get("ranking_explanation")
+            slim_re: dict[str, Any] | None = None
+            if isinstance(re, dict):
+                if re.get("error"):
+                    slim_re = {"error": re.get("error")}
+                else:
+                    slim_re = {
+                        "explanation": re.get("explanation"),
+                        "score": re.get("score"),
+                        "overlap_ratio": re.get("overlap_ratio"),
+                    }
+            iq = c.get("interview_questions")
+            slim_iq: dict[str, Any] | None = None
+            if isinstance(iq, dict):
+                if iq.get("error"):
+                    slim_iq = {"error": iq.get("error")}
+                else:
+                    slim_iq = {
+                        "skill_gaps": iq.get("skill_gaps") or [],
+                        "technical_questions": iq.get("technical_questions") or [],
+                        "behavioral_questions": iq.get("behavioral_questions") or [],
+                    }
+            row: dict[str, Any] = {
+                "rank": i + 1,
+                "candidate_id": c.get("candidate_id"),
+                "match_score": score,
+                "score_pct": int(round(float(score or 0) * 100)),
+                "match_tier": tier,
+                "skills_overlap": match.get("skills_overlap") or [],
+                "outreach": {
+                    "draft": outreach.get("draft"),
+                    "status": outreach.get("status"),
+                    "requires_human_review": outreach.get("requires_human_review", True),
+                },
+            }
+            if slim_re is not None:
+                row["ranking_explanation"] = slim_re
+            if slim_iq is not None:
+                row["interview_questions"] = slim_iq
+            out.append(row)
         return out
 
     def _slim_steps(raw_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -233,6 +305,8 @@ async def get_latest_result(trace_id: str) -> dict[str, Any] | None:
                             "candidate_id": data.get("candidate_id"),
                             "match_score": score,
                             "match_tier": _tier_from_score(score),
+                            # Keep overlap for in-progress preview (get_latest_result uses raw steps).
+                            "match": {"skills_overlap": match.get("skills_overlap") or []},
                         },
                     }
                 )
@@ -275,5 +349,10 @@ async def get_latest_result(trace_id: str) -> dict[str, Any] | None:
             }
     if stats is not None:
         result["stats"] = stats
+    elif ranked_candidates is None:
+        preview_rows, preview_stats = _preview_ranking_from_steps(steps, tier_fn=_tier_from_score)
+        if preview_rows:
+            result["ranked_candidates_preview"] = preview_rows
+            result["stats_preview"] = preview_stats
     return result
 
