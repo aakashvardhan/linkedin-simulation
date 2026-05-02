@@ -2,7 +2,8 @@
 
 Two routers live side-by-side:
 - `/agent/*` (partner's recruiter-facing endpoints, `app.api.routes`)
-- `/ai/*`    (candidate-facing endpoints, `app.api.candidate_routes`)
+- `/ai/*`    (candidate-facing endpoints, `app.api.candidate_routes`, including
+  async Career Coach: `POST /ai/career-coach/kickoff` + HITL `POST /ai/career-coach/approve`)
 
 Both share the Kafka producer/consumer, Mongo task store, and WebSocket hub.
 """
