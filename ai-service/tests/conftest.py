@@ -95,7 +95,17 @@ class _InMemoryStore:
                 "finished_at": datetime.datetime.now(datetime.timezone.utc),
             }
         )
-        return await self.append_step(task_id, failed)
+        task = self.tasks.get(task_id)
+        if task is None:
+            return None
+        updated = task.model_copy(
+            update={
+                "steps": [*task.steps, failed],
+                "status": TaskStatus.FAILED,
+            }
+        )
+        self.tasks[task_id] = updated
+        return updated
 
 
 @pytest.fixture(autouse=True)
