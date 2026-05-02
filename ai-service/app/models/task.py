@@ -45,6 +45,7 @@ class StepName(str, Enum):
     MATCH_CANDIDATES = "match_candidates"
     OUTREACH_DRAFT = "outreach_draft"
     AWAIT_APPROVAL = "await_approval"
+    CAREER_COACH = "career_coach"
 
 
 class ApprovalAction(str, Enum):
@@ -76,7 +77,13 @@ class AgentTask(BaseModel):
 
     task_id: str
     trace_id: str
-    recruiter_id: str
+    recruiter_id: str = ""
+    member_id: str | None = None
+    """Set for member-facing workflows (Career Coach)."""
+
+    task_kind: str = "recruiter"
+    """`recruiter` — hiring assistant; `member` — career coach with HITL."""
+
     job_id: str | None = None
     top_k: int = 5
     generate_outreach: bool = False
@@ -94,14 +101,14 @@ class AgentTask(BaseModel):
 
     @property
     def progress_percent(self) -> int:
-        """Coarse-grained progress derived from completed steps.
+        """Coarse-grained progress derived from completed steps."""
 
-        Uses a fixed 3-step baseline (parse, match, outreach). When
-        `generate_outreach` is False the third step is skipped, so a
-        completed task still reaches 100%.
-        """
-
-        total_steps = 3 if self.generate_outreach else 2
+        if self.task_kind == "member":
+            total_steps = 1
+        elif self.generate_outreach:
+            total_steps = 3
+        else:
+            total_steps = 2
         if total_steps == 0:
             return 0
         return min(100, int(round(100 * self.steps_completed / total_steps)))
