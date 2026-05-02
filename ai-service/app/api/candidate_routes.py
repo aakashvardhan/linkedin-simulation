@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.agents import career_coach, job_matcher, outreach_drafter, resume_parser
-from app.api.auth import Principal, get_principal, require_recruiter
+from app.api.auth import Principal, get_principal, require_member, require_recruiter
 from app.clients import job_client, messaging_client, profile_client
 from app.clients.errors import ServiceError, translate_service_error
 from app.db import task_store
@@ -166,6 +166,28 @@ class CareerCoachRequest(BaseModel):
         result = _non_blank(value)
         assert result is not None
         return result
+
+
+class CareerCoachApproveRequest(BaseModel):
+    """Human-in-the-loop decision after async Career Coach finishes."""
+
+    task_id: str
+    member_id: str
+    action: ApprovalAction
+    edited_summary: str | None = None
+
+    @field_validator("task_id", "member_id")
+    @classmethod
+    def _ids_not_blank(cls, value: str) -> str:
+        result = _non_blank(value)
+        assert result is not None
+        return result
+
+    @field_validator("edited_summary")
+    @classmethod
+    def _optional_not_blank(cls, value: str | None) -> str | None:
+        return _non_blank(value)
+
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +455,10 @@ async def get_task(
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    total_steps = 3 if task.generate_outreach else 2
+    if task.task_kind == "member":
+        total_steps = 1
+    else:
+        total_steps = 3 if task.generate_outreach else 2
     steps_remaining = max(total_steps - task.steps_completed, 0)
     payload: dict[str, Any] = {
         "task_id": task.task_id,
@@ -530,6 +555,142 @@ async def approve_outreach(
     return {
         "task_id": body.task_id,
         "candidate_id": body.candidate_id,
+        "action": body.action.value,
+        "status": "recorded",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2.9 POST /ai/career-coach/kickoff — async Career Coach + Kafka + HITL
+# ---------------------------------------------------------------------------
+
+
+@router.post("/career-coach/kickoff", status_code=status.HTTP_202_ACCEPTED)
+async def career_coach_kickoff(
+    body: CareerCoachRequest,
+    principal: Principal = Depends(require_member),
+) -> dict[str, Any]:
+    """Enqueue a Career Coach run; consumer produces suggestions then `awaiting_approval`."""
+
+    if principal.subject_id != body.member_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot start coaching for another member",
+        )
+    try:
+        await job_client.fetch_job(body.target_job_id)
+    except ServiceError as exc:
+        raise _handle_service_error(exc) from exc
+
+    task_id = str(uuid.uuid4())
+    trace_id = task_id
+
+    task = AgentTask(
+        task_id=task_id,
+        trace_id=trace_id,
+        member_id=body.member_id,
+        task_kind="member",
+        job_id=body.target_job_id,
+        idempotency_key=task_id,
+        status=TaskStatus.PROCESSING,
+    )
+    await task_store.create_task(task)
+
+    envelope = KafkaEnvelope(
+        event_type=AIEventType.AI_REQUESTED.value,
+        trace_id=trace_id,
+        actor_id=body.member_id,
+        entity={"entity_type": AIEntityType.AI_TASK.value, "entity_id": task_id},
+        payload={
+            "task_id": task_id,
+            "career_coach": True,
+            "member_id": body.member_id,
+            "target_job_id": body.target_job_id,
+        },
+        idempotency_key=task_id,
+    )
+    try:
+        await publish_event(AI_REQUESTS_TOPIC, envelope.model_dump(mode="json"))
+    except Exception as e:
+        logger.error("Kafka publish failed for career coach task_id=%s: %s", task_id, e)
+        await task_store.update_status(task_id, TaskStatus.FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to enqueue career coach task; please retry",
+        ) from e
+
+    return {
+        "task_id": task_id,
+        "trace_id": trace_id,
+        "status": TaskStatus.PROCESSING.value,
+        "websocket_url": f"/ai/ws/{task_id}",
+    }
+
+
+@router.post("/career-coach/approve")
+async def approve_career_coach(
+    body: CareerCoachApproveRequest,
+    principal: Principal = Depends(require_member),
+) -> dict[str, Any]:
+    """Record the member's approve / edit / reject decision on coaching output."""
+
+    task = await task_store.get_task(body.task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if task.task_kind != "member":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a career coach task",
+        )
+    if task.member_id != body.member_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Member does not own this task",
+        )
+    if principal.subject_id != body.member_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Caller does not match member_id",
+        )
+    if task.status != TaskStatus.AWAITING_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task is in status '{task.status.value}'; cannot record approval",
+        )
+    if task.approval is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval already recorded for this task",
+        )
+
+    if body.action == ApprovalAction.EDITED and not (body.edited_summary or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="edited_summary is required when action is edited",
+        )
+
+    approval = {
+        "member_id": body.member_id,
+        "action": body.action.value,
+        "edited_summary": body.edited_summary,
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+    await task_store.record_approval(body.task_id, approval)
+
+    envelope = KafkaEnvelope(
+        event_type=AIEventType.AI_APPROVAL_RECORDED.value,
+        trace_id=task.trace_id,
+        actor_id=body.member_id,
+        entity={"entity_type": AIEntityType.AI_TASK.value, "entity_id": body.task_id},
+        payload=approval,
+        idempotency_key=f"{body.task_id}:career_coach:{body.action.value}",
+    )
+    await publish_event(AI_RESULTS_TOPIC, envelope.model_dump(mode="json"))
+
+    return {
+        "task_id": body.task_id,
+        "member_id": body.member_id,
         "action": body.action.value,
         "status": "recorded",
     }
