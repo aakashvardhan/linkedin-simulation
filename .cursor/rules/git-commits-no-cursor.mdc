@@ -1,0 +1,12 @@
+---
+description: Never attribute Cursor in git commits or as a contributor
+alwaysApply: true
+---
+
+# Git commits: no Cursor attribution
+
+- Do **not** add `Co-authored-by: Cursor`, `Co-authored-by: cursoragent@cursor.com`, or any Cursor/Changelog footer to commit messages.
+- Do **not** list Cursor as a contributor in commit trailers or GitHub co-author metadata.
+- When creating commits in this repo, use **`git commit --no-verify`** only if a local hook incorrectly injects Cursor co-author lines; prefer fixing the hook so normal commits stay valid.
+
+Human authors own authorship; AI assistance must not appear in `git log` or GitHub contributor attribution.
