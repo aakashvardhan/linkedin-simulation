@@ -91,11 +91,21 @@ const Jobs = () => {
 
   const selectedJob = useMemo(() => {
     if (selectedJobId != null) {
-      const found = jobs.find((j) => j.id === selectedJobId);
-      if (found) return found;
+      const match = filteredJobs.find((j) => j.id === selectedJobId);
+      if (match) return match;
     }
     return filteredJobs[0] || null;
-  }, [jobs, selectedJobId, filteredJobs]);
+  }, [selectedJobId, filteredJobs]);
+
+  useEffect(() => {
+    if (filteredJobs.length === 0) {
+      setSelectedJobId(null);
+      return;
+    }
+    if (selectedJobId == null || !filteredJobs.some((j) => j.id === selectedJobId)) {
+      setSelectedJobId(filteredJobs[0].id);
+    }
+  }, [filteredJobs, selectedJobId]);
 
   const handleParseResumeAndMatch = () => {
     const skills = extractSkillsFromResume(resumeMatchText);
@@ -220,6 +230,7 @@ const Jobs = () => {
             <FaSearch color="#666" size={14} />
             <input 
               type="text" 
+              data-testid="jobs-keyword-search"
               placeholder="Keywords (title, company, industry, description)" 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -550,8 +561,9 @@ const Jobs = () => {
 
           <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', borderRadius: '8px', border: '1px solid #e0e0df', overflow: 'hidden', backgroundColor: '#ffffff', boxShadow: '0 1px 2px rgba(0,0,0,0.06)' }}>
             <div style={{ padding: '10px 16px', borderBottom: '1px solid #e0e0df', backgroundColor: '#fafaf9', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-              <span style={{ fontSize: '14px', color: '#666666' }}>
-                <strong style={{ color: '#191919' }}>{filteredJobs.length}</strong> results
+              <span style={{ fontSize: '14px', color: '#666666' }} role="status" aria-live="polite" data-testid="jobs-result-count">
+                <strong style={{ color: '#191919' }}>{filteredJobs.length}</strong>{' '}
+                {filteredJobs.length === 1 ? 'result' : 'results'}
                 <span style={{ color: '#999', marginLeft: '8px' }}>· Personalized for you</span>
               </span>
             </div>
@@ -682,6 +694,11 @@ const Jobs = () => {
                                type="button"
                                onClick={handleApplyClick}
                                disabled={selectedJob.hasApplied}
+                               aria-label={
+                                 selectedJob.hasApplied
+                                   ? 'Already applied to this job'
+                                   : 'Easy Apply to this job'
+                               }
                                style={{
                                  display: 'flex',
                                  alignItems: 'center',
@@ -696,7 +713,7 @@ const Jobs = () => {
                                  cursor: selectedJob.hasApplied ? 'not-allowed' : 'pointer',
                                }}
                              >
-                               <FaBriefcase /> {selectedJob.hasApplied ? 'Applied' : 'Easy Apply'}
+                               <FaBriefcase aria-hidden /> {selectedJob.hasApplied ? 'Applied' : 'Easy Apply'}
                              </button>
                           </div>
 

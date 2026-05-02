@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:run": "vitest run",
+    "ci": "npm run lint && npm run test:run && npm run build",
     "test:api": "API_BASE_URL=http://127.0.0.1:8000 vitest run src/api/__tests__/apiEndpoints.test.js",
     "preview": "vite preview"
   },
