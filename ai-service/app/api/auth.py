@@ -73,3 +73,13 @@ def require_recruiter(principal: Principal = Depends(get_principal)) -> Principa
             detail="Recruiter role required",
         )
     return principal
+
+def require_member(principal: Principal = Depends(get_principal)) -> Principal:
+    """Authorize member-only endpoints (returns 403 for non-members)."""
+
+    if principal.role != "member":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Member role required",
+        )
+    return principal
