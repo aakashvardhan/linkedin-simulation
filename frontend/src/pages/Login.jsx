@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  FaGoogle,
   FaUser,
   FaBuilding,
   FaCompass,
@@ -11,13 +10,7 @@ import {
   FaGamepad,
 } from 'react-icons/fa';
 import { BrandMark } from '../components/BrandMark';
-import {
-  useMockData,
-  DEMO_MEMBER_EMAIL,
-  DEMO_RECRUITER_EMAIL,
-  DEMO_MEMBER_NAME,
-  DEMO_RECRUITER_NAME,
-} from '../context/MockDataContext';
+import { useMockData } from '../context/MockDataContext';
 
 const fieldLabelStyle = {
   fontSize: '11px',
@@ -62,6 +55,8 @@ const Login = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [companyIndustry, setCompanyIndustry] = useState('');
   const [formError, setFormError] = useState('');
 
   useEffect(() => {
@@ -83,14 +78,6 @@ const Login = () => {
     };
   }, [showAuthPanel]);
 
-  useEffect(() => {
-    if (!showAuthPanel) return;
-    setEmail(authRole === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL);
-    if (mode === 'signup') {
-      setFullName(authRole === 'RECRUITER' ? DEMO_RECRUITER_NAME : DEMO_MEMBER_NAME);
-    }
-  }, [showAuthPanel, authRole, mode]);
-
   const title = useMemo(() => (mode === 'signup' ? 'Create your account' : 'Welcome back'), [mode]);
   const subtitle = useMemo(
     () => (mode === 'signup' ? 'Fill in the details to get started' : 'Sign in to continue'),
@@ -102,15 +89,29 @@ const Login = () => {
     return `Create ${authRole === 'RECRUITER' ? 'Recruiter' : 'Member'} Account`;
   }, [mode, authRole]);
 
+  const clearAuthForm = () => {
+    setFullName('');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setPhone('');
+    setCity('');
+    setCompanyName('');
+    setCompanyIndustry('');
+    setFormError('');
+  };
+
   const startJoin = (role) => {
     setAuthRole(role);
     setMode('signup');
+    clearAuthForm();
     setShowAuthPanel(true);
   };
 
   const startSignIn = (role) => {
     setAuthRole(role);
     setMode('signin');
+    clearAuthForm();
     setShowAuthPanel(true);
   };
 
@@ -120,9 +121,18 @@ const Login = () => {
     e.preventDefault();
     setFormError('');
 
+    if (!email.trim()) {
+      setFormError('Please enter your email.');
+      return;
+    }
+
     if (mode === 'signup') {
       if (!fullName.trim()) {
         setFormError('Please enter your full name.');
+        return;
+      }
+      if (authRole === 'RECRUITER' && !companyName.trim()) {
+        setFormError('Please enter your company name.');
         return;
       }
       if (password.length < 8) {
@@ -139,7 +149,16 @@ const Login = () => {
       await login(authRole, {
         email,
         password,
-        ...(mode === 'signup' ? { displayName: fullName.trim() } : {}),
+        isSignup: mode === 'signup',
+        ...(mode === 'signup'
+          ? {
+              displayName: fullName.trim(),
+              phone,
+              city,
+              companyName,
+              companyIndustry,
+            }
+          : {}),
       });
     } catch (err) {
       setFormError(err?.message || 'Could not authenticate with the backend. Check VITE_API_BASE_URL and auth endpoints.');
@@ -455,11 +474,11 @@ const Login = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
                   <div>
                     <div style={fieldLabelStyle}>FULL NAME</div>
-                    <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder={DEMO_MEMBER_NAME} style={inputStyle} required />
+                    <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" style={inputStyle} required />
                   </div>
                   <div>
                     <div style={fieldLabelStyle}>EMAIL</div>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={authRole === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL} style={inputStyle} required />
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" style={inputStyle} required />
                   </div>
                   <div>
                     <div style={fieldLabelStyle}>PASSWORD</div>
@@ -477,12 +496,35 @@ const Login = () => {
                     <div style={fieldLabelStyle}>CITY</div>
                     <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="San Francisco" style={inputStyle} />
                   </div>
+                  {authRole === 'RECRUITER' ? (
+                    <>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <div style={fieldLabelStyle}>COMPANY NAME</div>
+                        <input
+                          value={companyName}
+                          onChange={(e) => setCompanyName(e.target.value)}
+                          placeholder="Your employer or agency"
+                          style={inputStyle}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <div style={fieldLabelStyle}>INDUSTRY (OPTIONAL)</div>
+                        <input
+                          value={companyIndustry}
+                          onChange={(e) => setCompanyIndustry(e.target.value)}
+                          placeholder="e.g. Technology, Healthcare"
+                          style={inputStyle}
+                        />
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px', maxWidth: '520px' }}>
                   <div>
                     <div style={fieldLabelStyle}>EMAIL</div>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={authRole === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL} style={inputStyle} required />
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" style={inputStyle} required />
                   </div>
                   <div>
                     <div style={fieldLabelStyle}>PASSWORD</div>
@@ -519,41 +561,6 @@ const Login = () => {
                 {primaryCta}
               </button>
             </form>
-
-            <div style={{ display: 'flex', alignItems: 'center', margin: '18px 0' }}>
-              <div style={{ flex: 1, height: '1px', backgroundColor: '#e0e0df' }} />
-              <span style={{ padding: '0 16px', color: '#666', fontSize: '13px' }}>or</span>
-              <div style={{ flex: 1, height: '1px', backgroundColor: '#e0e0df' }} />
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                login(authRole, {
-                  email,
-                  password,
-                  ...(mode === 'signup' && fullName.trim() ? { displayName: fullName.trim() } : {}),
-                })
-              }
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '10px',
-                padding: '12px',
-                border: '1px solid #cfcfce',
-                borderRadius: '14px',
-                backgroundColor: '#fff',
-                cursor: 'pointer',
-                fontSize: '15px',
-                fontWeight: 900,
-                color: '#000000e6',
-              }}
-            >
-              <FaGoogle color="#DB4437" size={18} />
-              Continue with Google
-            </button>
 
             <p style={{ fontSize: '14px', textAlign: 'center', marginTop: '18px', color: '#666' }}>
               {mode === 'signup' ? 'Already have an account? ' : 'New here? '}

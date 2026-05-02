@@ -1,18 +1,29 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useMockData } from './context/MockDataContext';
 import MainLayout from './layout/MainLayout';
-import Home from './pages/Home';
-import Network from './pages/Network';
-import Jobs from './pages/Jobs';
-import Messaging from './pages/Messaging';
-import Notifications from './pages/Notifications';
-import Profile from './pages/Profile';
 import Login from './pages/Login';
-import RecruiterDashboard from './pages/RecruiterDashboard';
-import RecruiterJobs from './pages/RecruiterJobs';
-import RecruiterProfile from './pages/RecruiterProfile';
-import AgentWidget from './components/AgentWidget';
+
+const AgentWidgetLazy = lazy(() => import('./components/AgentWidget'));
+
+/** Lazy so `/login` never loads `pdfjs-dist` (Jobs/Profile/CareerCoach pull it in; Vite + pdfjs can TDZ as `controller`). */
+const Home = lazy(() => import('./pages/Home'));
+const Network = lazy(() => import('./pages/Network'));
+const Jobs = lazy(() => import('./pages/Jobs'));
+const Messaging = lazy(() => import('./pages/Messaging'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const Profile = lazy(() => import('./pages/Profile'));
+const RecruiterDashboard = lazy(() => import('./pages/RecruiterDashboard'));
+const RecruiterJobs = lazy(() => import('./pages/RecruiterJobs'));
+const RecruiterProfile = lazy(() => import('./pages/RecruiterProfile'));
+
+function RouteFallback() {
+  return (
+    <div style={{ padding: '24px', textAlign: 'center', color: '#666', fontSize: '14px' }}>
+      Loading…
+    </div>
+  );
+}
 
 function ProtectedShell() {
   const { userRole } = useMockData();
@@ -25,28 +36,32 @@ function AuthenticatedRoutes() {
 
   if (userRole === 'RECRUITER') {
     return (
-      <Routes>
-        <Route path="/home" element={<Home />} />
-        <Route path="/recruiter/dashboard" element={<RecruiterDashboard />} />
-        <Route path="/recruiter/jobs" element={<RecruiterJobs />} />
-        <Route path="/recruiter/profile" element={<RecruiterProfile />} />
-        <Route path="/network" element={<Network />} />
-        <Route path="/messaging" element={<Messaging />} />
-        <Route path="*" element={<Navigate to="/home" replace />} />
-      </Routes>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path="/home" element={<Home />} />
+          <Route path="/recruiter/dashboard" element={<RecruiterDashboard />} />
+          <Route path="/recruiter/jobs" element={<RecruiterJobs />} />
+          <Route path="/recruiter/profile" element={<RecruiterProfile />} />
+          <Route path="/network" element={<Network />} />
+          <Route path="/messaging" element={<Messaging />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
+        </Routes>
+      </Suspense>
     );
   }
 
   return (
-    <Routes>
-      <Route path="/home" element={<Home />} />
-      <Route path="/network" element={<Network />} />
-      <Route path="/jobs" element={<Jobs />} />
-      <Route path="/messaging" element={<Messaging />} />
-      <Route path="/notifications" element={<Notifications />} />
-      <Route path="/in/me" element={<Profile />} />
-      <Route path="*" element={<Navigate to="/home" replace />} />
-    </Routes>
+    <Suspense fallback={<RouteFallback />}>
+      <Routes>
+        <Route path="/home" element={<Home />} />
+        <Route path="/network" element={<Network />} />
+        <Route path="/jobs" element={<Jobs />} />
+        <Route path="/messaging" element={<Messaging />} />
+        <Route path="/notifications" element={<Notifications />} />
+        <Route path="/in/me" element={<Profile />} />
+        <Route path="*" element={<Navigate to="/home" replace />} />
+      </Routes>
+    </Suspense>
   );
 }
 
@@ -59,6 +74,7 @@ function AppShell() {
 }
 
 function App() {
+  const { userRole } = useMockData();
   return (
     <BrowserRouter>
       <Routes>
@@ -74,7 +90,11 @@ function App() {
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <AgentWidget />
+      {userRole ? (
+        <Suspense fallback={null}>
+          <AgentWidgetLazy />
+        </Suspense>
+      ) : null}
     </BrowserRouter>
   );
 }

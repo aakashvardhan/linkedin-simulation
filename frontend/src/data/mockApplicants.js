@@ -9,7 +9,8 @@ const LAST = [
   'Müller', 'Cohen', 'Park', 'Silva', 'Ito', 'Kowalski', 'Nguyen', 'Rossi', 'Khan', 'Dubois',
 ];
 const COMPANIES = ['FinTech Co', 'HealthAI', 'DataScale', 'CloudNine', 'RetailNext', 'AutoDrive'];
-export const APPLICATION_STATUSES = ['New', 'Screening', 'Reviewed', 'Interview', 'Offer extended', 'Rejected'];
+/** Matches MySQL `applications.status` enum (backend Application Service). */
+export const APPLICATION_STATUSES = ['submitted', 'reviewing', 'interview', 'offer', 'rejected'];
 
 function mulberry32(a) {
   return function () {

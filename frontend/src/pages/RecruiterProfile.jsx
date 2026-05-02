@@ -5,14 +5,14 @@ import { useMockData, recruiterProfilePhotoKey, notifyProfilePhotoUpdated } from
 const RecruiterProfile = () => {
   const { userProfile } = useMockData();
   const [profile, setProfile] = useState({
-    name: 'Sarah Admin',
-    email: 'sarah.admin@techinnovations.com',
-    phone: '+1 (555) 987-6543',
-    companyName: 'Tech Innovations',
-    companyIndustry: 'Software Software / AI Tech',
-    companySize: '501-1000 employees',
-    roleAccessLevel: 'Senior Talent Acquisition Admin / Super Administrator',
-    profilePhotoUrl: ''
+    name: '',
+    email: '',
+    phone: '',
+    companyName: '',
+    companyIndustry: '',
+    companySize: '',
+    roleAccessLevel: '',
+    profilePhotoUrl: '',
   });
 
   const [isEditing, setIsEditing] = useState(false);
@@ -64,12 +64,20 @@ const RecruiterProfile = () => {
       ...p,
       name: userProfile.displayName,
       email: userProfile.email || p.email,
+      companyName: userProfile.company_name ?? p.companyName,
+      companyIndustry: userProfile.company_industry ?? p.companyIndustry,
+      companySize: userProfile.company_size ?? p.companySize,
+      phone: userProfile.phone ?? p.phone,
       profilePhotoUrl: storedPhoto,
     }));
     setEditForm((p) => ({
       ...p,
       name: userProfile.displayName,
       email: userProfile.email || p.email,
+      companyName: userProfile.company_name ?? p.companyName,
+      companyIndustry: userProfile.company_industry ?? p.companyIndustry,
+      companySize: userProfile.company_size ?? p.companySize,
+      phone: userProfile.phone ?? p.phone,
       profilePhotoUrl: storedPhoto,
     }));
   }, [userProfile]);

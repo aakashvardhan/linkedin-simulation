@@ -1,35 +1,58 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { FaRobot, FaPaperPlane, FaStar } from 'react-icons/fa';
+import { makeApi } from '../api';
+import { useMockData } from '../context/MockDataContext';
+import { extractAgentReply } from '../utils/agentReply';
 
 const SYMBOL_DARK = '#3d2654';
 
 const AgentWidget = () => {
+  const { authToken } = useMockData();
+  const api = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState([
     { id: 'm1', role: 'agent', text: 'Hi! I’m your copilot. Ask me to draft outreach, summarize applicants, or suggest edits.' },
   ]);
 
-  const canSend = input.trim().length > 0;
+  const canSend = input.trim().length > 0 && !sending;
 
-  const placeholderReply = useMemo(() => {
-    return 'Got it. I can help with that—once the backend agent service is connected, I’ll stream progress and results here.';
-  }, []);
-
-  const send = () => {
-    if (!canSend) return;
-    const userMsg = { id: `u-${Date.now()}`, role: 'user', text: input.trim() };
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    const userMsg = { id: `u-${Date.now()}`, role: 'user', text };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
+    setSending(true);
 
-    // Placeholder behavior until FastAPI WS + Kafka orchestration is connected.
-    setTimeout(() => {
+    try {
+      const data = await api.ai.request({
+        channel: 'copilot',
+        intent: 'copilot.chat',
+        prompt: text,
+      });
+      const reply =
+        extractAgentReply(data) ||
+        'The agent returned an empty body. Implement `reply`, `message`, or `text` on `POST /ai/request`.';
+      setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: 'agent', text: reply }]);
+    } catch (e) {
+      const hint =
+        e?.code === 'NETWORK' || e?.code === 'TIMEOUT'
+          ? ` (${String(import.meta.env.VITE_API_BASE_URL || '') || 'API base URL'} unreachable?)`
+          : '';
       setMessages((prev) => [
         ...prev,
-        { id: `a-${Date.now()}`, role: 'agent', text: placeholderReply },
+        {
+          id: `a-${Date.now()}`,
+          role: 'agent',
+          text: `${e?.message || 'Request failed'}${hint}`,
+        },
       ]);
-    }, 600);
-  };
+    } finally {
+      setSending(false);
+    }
+  }, [api, input, sending]);
 
   return (
     <div
@@ -169,6 +192,7 @@ const AgentWidget = () => {
             <button
               onClick={send}
               disabled={!canSend}
+              aria-busy={sending}
               aria-label="Send"
               style={{
                 width: '36px',

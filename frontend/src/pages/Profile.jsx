@@ -81,6 +81,7 @@ const Profile = () => {
     getMemberAnalytics,
     userProfile,
     updateUserProfile,
+    saveMemberProfileRemote,
     deleteMemberProfile,
     jobs,
     authToken,
@@ -94,18 +95,14 @@ const Profile = () => {
     firstName: '',
     lastName: '',
     email: '',
-    phone: '+1 (555) 123-4567',
-    headline: 'Software Engineer at Tech Innovations | Building the future of the web',
-    location: 'San Francisco, CA, United States',
-    about: 'Passionate Software Engineer with 5+ years of experience in building scalable web applications. Proficient in React, Node.js, and cloud architectures.',
-    experience: [
-      { id: 1, title: 'Senior Software Engineer', company: 'Tech Innovations', duration: 'Jan 2023 - Present' }
-    ],
-    education: [
-      { id: 1, degree: 'B.S. Computer Science', school: 'University of California, Berkeley', year: '2019' }
-    ],
-    skills: 'React.js, Node.js, System Design, Kafka, Microservices',
-    resumeUrl: 'john_doe_resume_2026.pdf',
+    phone: '',
+    headline: '',
+    location: '',
+    about: '',
+    experience: [],
+    education: [],
+    skills: '',
+    resumeUrl: '',
     profilePhotoUrl: '',
     extraSections: [],
   });
@@ -171,7 +168,7 @@ const Profile = () => {
     [userProfile?.email, profile.email, persistExtraSections],
   );
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const next = { ...editForm };
     const email = next.email || userProfile?.email;
     if (email) {
@@ -183,11 +180,24 @@ const Profile = () => {
         /* ignore quota */
       }
     }
+    const remote = await saveMemberProfileRemote(next);
+    if (remote?.ok === false) {
+      window.alert(remote.error?.message || 'Could not save profile to the server. Changes are kept locally.');
+    }
     setProfile(next);
     const fullName = `${next.firstName} ${next.lastName}`.trim();
     updateUserProfile({
       displayName: fullName || next.email || userProfile?.displayName || 'Member',
       headline: next.headline,
+      about: next.about,
+      skills: next.skills
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      phone: next.phone,
+      location_city: next.location.split(',')[0]?.trim(),
+      first_name: next.firstName,
+      last_name: next.lastName,
     });
     notifyProfilePhotoUpdated();
     setIsEditing(false);
@@ -228,10 +238,11 @@ const Profile = () => {
 
   useEffect(() => {
     if (!userProfile || userProfile.role === 'RECRUITER') return;
-    const parts = (userProfile.displayName || '').trim().split(/\s+/);
-    const firstName = parts[0] || 'Member';
-    const lastName = parts.slice(1).join(' ') || '';
     const email = userProfile.email || '';
+    const dn = (userProfile.displayName || '').trim();
+    const parts = dn.split(/\s+/).filter(Boolean);
+    const firstName = userProfile.first_name ?? parts[0] ?? '';
+    const lastName = userProfile.last_name ?? parts.slice(1).join(' ') ?? '';
     let storedPhoto = '';
     try {
       storedPhoto = localStorage.getItem(memberProfilePhotoKey(email)) || '';
@@ -246,24 +257,97 @@ const Profile = () => {
     } catch {
       extraSections = [];
     }
-    setProfile((p) => ({
-      ...p,
-      firstName,
-      lastName,
-      email: userProfile.email || p.email,
-      profilePhotoUrl: storedPhoto,
-      extraSections,
-      headline: userProfile.headline || p.headline,
-    }));
-    setEditForm((p) => ({
-      ...p,
-      firstName,
-      lastName,
-      email: userProfile.email || p.email,
-      profilePhotoUrl: storedPhoto,
-      extraSections,
-      headline: userProfile.headline || p.headline,
-    }));
+    const skillsStr = Array.isArray(userProfile.skills)
+      ? userProfile.skills.join(', ')
+      : userProfile.skills || '';
+    const loc = [userProfile.location_city, userProfile.location_state].filter(Boolean).join(', ');
+
+    setProfile((p) => {
+      const expSrc = userProfile.experience;
+      const experience = Array.isArray(expSrc)
+        ? expSrc.map((e, idx) => ({
+            id: e.id ?? `exp-${idx}`,
+            title: e.title || '',
+            company: e.company || '',
+            duration:
+              e.start_date || e.end_date
+                ? `${String(e.start_date || '').slice(0, 10)} – ${String(e.end_date || '').slice(0, 10) || 'Present'}`
+                : '',
+            start_date: e.start_date,
+            end_date: e.end_date,
+            description: e.description,
+          }))
+        : p.experience;
+      const eduSrc = userProfile.education;
+      const education = Array.isArray(eduSrc)
+        ? eduSrc.map((e, idx) => ({
+            id: e.id ?? `edu-${idx}`,
+            school: e.school || '',
+            degree: e.degree || '',
+            year: [e.start_year, e.end_year].filter((x) => x != null && x !== '').join(' – ') || '',
+            field: e.field,
+          }))
+        : p.education;
+      return {
+        ...p,
+        firstName,
+        lastName,
+        email: userProfile.email || p.email,
+        profilePhotoUrl: storedPhoto || userProfile.profile_photo_url || p.profilePhotoUrl,
+        extraSections,
+        headline: userProfile.headline || p.headline,
+        about: userProfile.about ?? p.about,
+        phone: userProfile.phone ?? p.phone,
+        location: loc || p.location,
+        skills: skillsStr,
+        experience,
+        education,
+        resumeUrl: userProfile.resume_url || p.resumeUrl,
+      };
+    });
+    setEditForm((p) => {
+      const expSrc = userProfile.experience;
+      const experience = Array.isArray(expSrc)
+        ? expSrc.map((e, idx) => ({
+            id: e.id ?? `exp-${idx}`,
+            title: e.title || '',
+            company: e.company || '',
+            duration:
+              e.start_date || e.end_date
+                ? `${String(e.start_date || '').slice(0, 10)} – ${String(e.end_date || '').slice(0, 10) || 'Present'}`
+                : '',
+            start_date: e.start_date,
+            end_date: e.end_date,
+            description: e.description,
+          }))
+        : p.experience;
+      const eduSrc = userProfile.education;
+      const education = Array.isArray(eduSrc)
+        ? eduSrc.map((e, idx) => ({
+            id: e.id ?? `edu-${idx}`,
+            school: e.school || '',
+            degree: e.degree || '',
+            year: [e.start_year, e.end_year].filter((x) => x != null && x !== '').join(' – ') || '',
+            field: e.field,
+          }))
+        : p.education;
+      return {
+        ...p,
+        firstName,
+        lastName,
+        email: userProfile.email || p.email,
+        profilePhotoUrl: storedPhoto || userProfile.profile_photo_url || p.profilePhotoUrl,
+        extraSections,
+        headline: userProfile.headline || p.headline,
+        about: userProfile.about ?? p.about,
+        phone: userProfile.phone ?? p.phone,
+        location: loc || p.location,
+        skills: skillsStr,
+        experience,
+        education,
+        resumeUrl: userProfile.resume_url || p.resumeUrl,
+      };
+    });
   }, [userProfile]);
 
   const memberDisplayName =
@@ -586,21 +670,21 @@ const Profile = () => {
 
         <div className="card" style={{ padding: '24px', border: '1px solid #f5c6cb', backgroundColor: '#fff8f8' }}>
           <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '8px', color: '#b71c1c' }}>
-            Profile & account (demo)
+            Profile & account
           </h2>
           <h3 style={{ fontSize: '15px', fontWeight: 600, margin: '0 0 8px', color: '#000000e6' }}>
             Delete profile and sign out
           </h3>
           <p style={{ fontSize: '14px', color: '#666', marginBottom: '12px', lineHeight: 1.5 }}>
             Deletes locally saved member profile data on this browser (sections, photo, saved jobs, messages,
-            invitations) and signs you out. Demo only — no server-side account exists.
+            invitations) and signs you out. This clears data stored in this browser for your account.
           </p>
           <button
             type="button"
             onClick={() => {
               if (
                 !window.confirm(
-                  'Delete your member profile data on this device and sign out?\n\nThis cannot be undone in this demo.',
+                  'Delete your member profile data on this device and sign out?\n\nThis cannot be undone.',
                 )
               )
                 return;

@@ -1,16 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- context module exports hooks, constants, and provider */
-import React, { createContext, useEffect, useMemo, useState, useContext, useCallback } from 'react';
+import React, { createContext, useEffect, useMemo, useState, useContext, useCallback, useRef } from 'react';
 import { makeApi } from '../api';
-import jobsSeed from '../data/kaggle/jobsSeed.json';
-import postsSeed from '../data/kaggle/postsSeed.json';
-import connectionsSeed from '../data/kaggle/connectionsSeed.json';
-import {
-  fetchOpenSourceSeed,
-  fetchExtraSeedFromUrl,
-  normalizeMergedJob,
-  normalizeMergedPost,
-  normalizeMergedConnection,
-} from '../data/openSeedLoader';
 import { generateApplicantsForJob } from '../data/mockApplicants';
 
 const MockDataContext = createContext();
@@ -23,17 +13,41 @@ function envFlag(name, defaultValue = false) {
   return String(v).toLowerCase() === 'true' || v === '1';
 }
 
-/** When true, opt into extra backend hydration calls after login (best-effort). */
-const BACKEND_INTEGRATION = envFlag('VITE_BACKEND_INTEGRATION', false);
-/** When true, login must succeed against backend auth (no silent demo login). */
-const REQUIRE_BACKEND_AUTH = envFlag('VITE_REQUIRE_BACKEND_AUTH', false);
+/** When true, opt into extra backend hydration calls after login (best-effort). Defaults on for DB-backed / distributed runs. */
+const BACKEND_INTEGRATION = envFlag('VITE_BACKEND_INTEGRATION', true);
+/** When true, login must succeed against backend auth (no silent demo login). Defaults on so only real DB users can sign in. */
+const REQUIRE_BACKEND_AUTH = envFlag('VITE_REQUIRE_BACKEND_AUTH', true);
 /** When false, disables DummyJSON + extra seed merges for cleaner integration runs. */
 const DEMO_SEED_ENABLED = import.meta.env.VITE_DEMO_SEED !== 'false';
-/** When true, hydration replaces seeded jobs instead of merging. */
-const REPLACE_SEED_JOBS = envFlag('VITE_REPLACE_SEED_JOBS', false);
+/** When true, hydration replaces seeded jobs instead of merging (defaults on when backend integration is on and demo seed is off). */
+const REPLACE_SEED_JOBS = envFlag('VITE_REPLACE_SEED_JOBS', !DEMO_SEED_ENABLED && BACKEND_INTEGRATION);
+/** When true, member connections + incoming invites are replaced by `/connections/list` + `/connections/pending` after login. */
+const REPLACE_SEED_CONNECTIONS = envFlag('VITE_REPLACE_SEED_CONNECTIONS', !DEMO_SEED_ENABLED && BACKEND_INTEGRATION);
+/** When true, offline demo mode blocks apply until backend exists; when backend is on, applies always go through the API. */
+const STRICT_APPLICATIONS = envFlag('VITE_STRICT_APPLICATIONS', BACKEND_INTEGRATION && !DEMO_SEED_ENABLED);
+
+function isDuplicateApplicationError(err) {
+  const status = err?.status;
+  const msg = String(err?.message || '').toLowerCase();
+  const details = err?.details;
+  const bodyMsg =
+    typeof details === 'object' && details !== null
+      ? String(details.message || details.error || '').toLowerCase()
+      : String(details || '').toLowerCase();
+  return (
+    status === 409 ||
+    msg.includes('already applied') ||
+    msg.includes('duplicate') ||
+    bodyMsg.includes('already applied') ||
+    bodyMsg.includes('duplicate')
+  );
+}
 
 function resolveMemberKey(profile) {
   if (!profile) return 'me';
+  if (profile.role === 'RECRUITER' && profile.recruiter_id != null && String(profile.recruiter_id).trim() !== '') {
+    return profile.recruiter_id;
+  }
   const id =
     profile.member_id ??
     profile.memberId ??
@@ -48,11 +62,12 @@ function resolveMemberKey(profile) {
 
 function extractJobsArray(payload) {
   if (!payload) return [];
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload.jobs)) return payload.jobs;
-  if (Array.isArray(payload.items)) return payload.items;
-  if (Array.isArray(payload.results)) return payload.results;
-  if (Array.isArray(payload.data)) return payload.data;
+  const root = payload?.status === 'success' && payload?.data !== undefined ? payload.data : payload;
+  if (Array.isArray(root)) return root;
+  if (Array.isArray(root.jobs)) return root.jobs;
+  if (Array.isArray(root.items)) return root.items;
+  if (Array.isArray(root.results)) return root.results;
+  if (Array.isArray(root.data)) return root.data;
   return [];
 }
 
@@ -69,7 +84,9 @@ function mapBackendJobRow(raw, idx) {
   const industry = raw?.industry ?? raw?.sector ?? '';
   const description =
     raw?.description ?? raw?.summary ?? raw?.details ?? raw?.job_description ?? '';
-  const applicants = Number(raw?.applicants ?? raw?.applicant_count ?? raw?.applications_count ?? 0) || 0;
+  const applicants =
+    Number(raw?.applicants ?? raw?.applicant_count ?? raw?.applications_count ?? raw?.applicants_count ?? 0) ||
+    0;
   const hasApplied = !!(raw?.hasApplied ?? raw?.has_applied ?? raw?.applied);
 
   return {
@@ -86,11 +103,61 @@ function mapBackendJobRow(raw, idx) {
   };
 }
 
-/** Demo accounts for local UI (password can be anything in demo fallback). */
-export const DEMO_MEMBER_EMAIL = 'pratiksha@demo.linkdln';
-export const DEMO_RECRUITER_EMAIL = 'sneha@demo.linkdln';
-export const DEMO_MEMBER_NAME = 'Pratiksha Kaushik';
-export const DEMO_RECRUITER_NAME = 'Sneha';
+function formatAppliedAgo(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '—';
+  const diff = Date.now() - t;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function mapBackendApplicationRow(row) {
+  const aid = row?.application_id ?? row?.id;
+  return {
+    id: aid,
+    application_id: aid,
+    name: row?.name || 'Member',
+    email: row?.email || '',
+    headline: row?.headline || '',
+    resumeSummary: row?.resume_summary || '',
+    status: row?.status || 'submitted',
+    appliedAgo: formatAppliedAgo(row?.application_datetime),
+  };
+}
+
+function unwrapApiEnvelope(raw) {
+  if (raw && raw.status === 'success' && raw.data !== undefined) return raw.data;
+  return raw;
+}
+
+function mapBackendConnectionRow(row) {
+  const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || 'Member';
+  return {
+    id: row.member_id,
+    name,
+    headline: row.headline || '',
+    mutual: 0,
+    status: 'connected',
+  };
+}
+
+function mapBackendPendingInvite(row) {
+  const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || 'Member';
+  return {
+    id: `pending-${row.request_id}`,
+    request_id: row.request_id,
+    requester_id: row.requester_id,
+    name,
+    headline: row.headline || '',
+    mutual: 0,
+  };
+}
 
 export const memberProfilePhotoKey = (email) => `linkdln:memberProfilePhoto:${email || 'me'}`;
 export const recruiterProfilePhotoKey = (email) => `linkdln:recruiterProfilePhoto:${email || 'me'}`;
@@ -106,46 +173,50 @@ export const savedJobsStorageKey = (email) => `linkdln:savedJobIds:${email || 'm
 export const incomingInvitesStorageKey = (email) => `linkdln:incomingInvites:${email || 'me'}`;
 export const conversationsStorageKey = (email) => `linkdln:conversations:${email || 'me'}`;
 
-const defaultIncomingInvites = () => [
-  { id: 'inv-seed-1', name: 'Alice Smith', headline: 'Data Scientist at OpenAI', mutual: 12 },
-];
+const defaultIncomingInvites = () =>
+  DEMO_SEED_ENABLED
+    ? [{ id: 'inv-seed-1', name: 'Alice Smith', headline: 'Data Scientist at OpenAI', mutual: 12 }]
+    : [];
 
-const defaultConversationStore = () => ({
-  threads: [
-    {
-      id: 't1',
-      peerName: 'Elena Vogel',
-      peerId: 'elena',
-      messages: [
-        {
-          id: 'm1',
-          text: 'Hi there! Can we schedule a quick call tomorrow to discuss the new features?',
-          isMine: false,
-          time: '2:14 PM',
-        },
-        {
-          id: 'm2',
-          text: 'Hey! Yes, tomorrow at 10 AM PT works perfectly for me.',
-          isMine: true,
-          time: '2:30 PM',
-        },
-      ],
-    },
-    {
-      id: 't2',
-      peerName: 'James Park',
-      peerId: 'james',
-      messages: [
-        {
-          id: 'm3',
-          text: 'Thanks for connecting — let me know if you want an intro to our hiring manager.',
-          isMine: false,
-          time: 'Mon',
-        },
-      ],
-    },
-  ],
-});
+const defaultConversationStore = () =>
+  DEMO_SEED_ENABLED
+    ? {
+        threads: [
+          {
+            id: 't1',
+            peerName: 'Elena Vogel',
+            peerId: 'elena',
+            messages: [
+              {
+                id: 'm1',
+                text: 'Hi there! Can we schedule a quick call tomorrow to discuss the new features?',
+                isMine: false,
+                time: '2:14 PM',
+              },
+              {
+                id: 'm2',
+                text: 'Hey! Yes, tomorrow at 10 AM PT works perfectly for me.',
+                isMine: true,
+                time: '2:30 PM',
+              },
+            ],
+          },
+          {
+            id: 't2',
+            peerName: 'James Park',
+            peerId: 'james',
+            messages: [
+              {
+                id: 'm3',
+                text: 'Thanks for connecting — let me know if you want an intro to our hiring manager.',
+                isMine: false,
+                time: 'Mon',
+              },
+            ],
+          },
+        ],
+      }
+    : { threads: [] };
 
 /** "jane.doe@x.com" → "Jane Doe" for default display when no name was given */
 function displayNameFromEmail(email) {
@@ -157,6 +228,70 @@ function displayNameFromEmail(email) {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(' ');
+}
+
+function splitDisplayName(fullName) {
+  const t = (fullName || '').trim();
+  if (!t) return { first: 'Member', last: '-' };
+  const parts = t.split(/\s+/);
+  const first = parts[0];
+  const last = parts.slice(1).join(' ') || '-';
+  return { first, last };
+}
+
+function formatRegisterError(err) {
+  const d = err?.details;
+  if (typeof d?.detail === 'string') return d.detail;
+  if (Array.isArray(d?.detail)) return d.detail.map((x) => x?.msg || x).filter(Boolean).join(', ') || err.message;
+  return err?.message || 'Registration failed';
+}
+
+async function hydrateProfileAfterLogin(role, token, base) {
+  if (!token || !BACKEND_INTEGRATION) return base;
+  const apiT = makeApi({ getAuthToken: () => token });
+  try {
+    if (role === 'MEMBER' && base.member_id != null) {
+      const d = await apiT.members.get({ member_id: Number(base.member_id) });
+      if (!d || typeof d !== 'object') return base;
+      return {
+        ...base,
+        first_name: d.first_name,
+        last_name: d.last_name,
+        displayName: [d.first_name, d.last_name].filter(Boolean).join(' ').trim() || base.displayName,
+        headline: (d.headline ?? base.headline) || '',
+        about: d.about ?? '',
+        skills: d.skills,
+        experience: d.experience,
+        education: d.education,
+        phone: d.phone ?? '',
+        location_city: d.location_city,
+        location_state: d.location_state,
+        location_country: d.location_country,
+        profile_photo_url: d.profile_photo_url,
+        resume_url: d.resume_url,
+      };
+    }
+    if (role === 'RECRUITER' && base.recruiter_id != null) {
+      const d = await apiT.recruiters.get({ recruiter_id: Number(base.recruiter_id) });
+      if (!d || typeof d !== 'object') return base;
+      const dn = [d.first_name, d.last_name].filter(Boolean).join(' ').trim();
+      return {
+        ...base,
+        first_name: d.first_name,
+        last_name: d.last_name,
+        displayName: dn || base.displayName,
+        headline: d.company_name ? `${dn} · ${d.company_name}` : base.headline,
+        company_id: d.company_id,
+        company_name: d.company_name,
+        company_industry: d.company_industry,
+        company_size: d.company_size,
+        phone: d.phone ?? base.phone ?? '',
+      };
+    }
+  } catch {
+    return base;
+  }
+  return base;
 }
 
 export const MockDataProvider = ({ children }) => {
@@ -189,42 +324,19 @@ export const MockDataProvider = ({ children }) => {
     else localStorage.removeItem('userProfile');
   }, [userProfile]);
 
-  /** Older sessions may have userRole without userProfile */
+  /** Corrupt session (role in storage but no profile) — clear so the user must sign in again. */
   useEffect(() => {
     if (!userRole || userProfile) return;
-    setUserProfile({
-      displayName: userRole === 'RECRUITER' ? DEMO_RECRUITER_NAME : DEMO_MEMBER_NAME,
-      email: userRole === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL,
-      role: userRole,
-      headline:
-        userRole === 'RECRUITER'
-          ? 'Recruiting & talent · linkedlnDS'
-          : 'Professional · Edit your profile to add a headline',
-    });
+    setUserRole(null);
+    localStorage.removeItem('userRole');
   }, [userRole, userProfile]);
 
-  /** Legacy userProfile JSON in localStorage without headline */
-  useEffect(() => {
-    if (!userProfile || userProfile.headline) return;
-    setUserProfile((p) =>
-      p
-        ? {
-            ...p,
-            headline:
-              p.role === 'RECRUITER'
-                ? 'Recruiting & talent · linkedlnDS'
-                : 'Professional · Edit your profile to add a headline',
-          }
-        : p,
-    );
-  }, [userProfile]);
+  /** Start empty; demo bundles load asynchronously only when `VITE_DEMO_SEED` is not `false`. */
+  const [posts, setPosts] = useState(() => []);
 
-  /** Feed + jobs + network: synthetic seeds aligned with Kaggle job/resume-style datasets (see datasets/kaggle-seed/SOURCES.md). */
-  const [posts, setPosts] = useState(() => [...postsSeed]);
+  const [jobs, setJobs] = useState(() => []);
 
-  const [jobs, setJobs] = useState(() => [...jobsSeed]);
-
-  const [connections, setConnections] = useState(() => [...connectionsSeed]);
+  const [connections, setConnections] = useState(() => []);
 
   /** Recruiter view: synthetic + live applications per job id (string key). */
   const [applicantsByJobId, setApplicantsByJobId] = useState({});
@@ -232,6 +344,35 @@ export const MockDataProvider = ({ children }) => {
   const [savedJobIds, setSavedJobIds] = useState(() => new Set());
   const [incomingInvites, setIncomingInvites] = useState(defaultIncomingInvites);
   const [conversationStore, setConversationStore] = useState(defaultConversationStore);
+  const incomingInvitesRef = useRef(incomingInvites);
+  useEffect(() => {
+    incomingInvitesRef.current = incomingInvites;
+  }, [incomingInvites]);
+
+  const jobIdsKey = useMemo(() => jobs.map((j) => String(j.id)).sort().join('|'), [jobs]);
+
+  useEffect(() => {
+    if (!DEMO_SEED_ENABLED) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [jm, pm, cm] = await Promise.all([
+          import('../data/kaggle/jobsSeed.json'),
+          import('../data/kaggle/postsSeed.json'),
+          import('../data/kaggle/connectionsSeed.json'),
+        ]);
+        if (cancelled) return;
+        setJobs((prev) => (prev.length ? prev : [...jm.default]));
+        setPosts((prev) => (prev.length ? prev : [...pm.default]));
+        setConnections((prev) => (prev.length ? prev : [...cm.default]));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const email = userProfile?.email;
@@ -314,6 +455,7 @@ export const MockDataProvider = ({ children }) => {
   }, [conversationStore, userProfile?.email]);
 
   useEffect(() => {
+    if (!DEMO_SEED_ENABLED || BACKEND_INTEGRATION) return;
     setApplicantsByJobId((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -328,7 +470,7 @@ export const MockDataProvider = ({ children }) => {
     });
   }, [jobs]);
 
-  /** Optional: hydrate jobs list from backend gateway after login (integration runs). */
+  /** Optional: hydrate jobs list from core backend after login (integration runs). */
   useEffect(() => {
     if (!BACKEND_INTEGRATION) return undefined;
     if (!userRole || !authToken) return undefined;
@@ -336,16 +478,29 @@ export const MockDataProvider = ({ children }) => {
     let cancelled = false;
     (async () => {
       try {
-        let payload = { query: '', limit: 200 };
-        if (userRole === 'RECRUITER' && userProfile?.email) {
-          payload = { ...payload, recruiter_email: userProfile.email };
+        let res;
+        if (userRole === 'RECRUITER') {
+          const rid = userProfile?.recruiter_id ?? userProfile?.member_id;
+          if (rid == null || Number.isNaN(Number(rid))) return;
+          res = await api.jobs.byRecruiter({
+            recruiter_id: Number(rid),
+            page: 1,
+            page_size: 200,
+          });
+        } else {
+          res = await api.jobs.search({
+            keyword: '',
+            page: 1,
+            page_size: 200,
+          });
         }
-
-        const res = await api.jobs.search(payload);
         if (cancelled) return;
 
         const rows = extractJobsArray(res).map((r, idx) => mapBackendJobRow(r, idx));
-        if (!rows.length) return;
+        if (!rows.length) {
+          if (REPLACE_SEED_JOBS) setJobs([]);
+          return;
+        }
 
         setJobs((prev) => {
           if (REPLACE_SEED_JOBS) return rows;
@@ -362,7 +517,103 @@ export const MockDataProvider = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, [api, authToken, userProfile?.email, userRole]);
+  }, [api, authToken, userProfile?.email, userProfile?.member_id, userProfile?.recruiter_id, userRole]);
+
+  /** Recruiter: load real applicants from Application Service (replaces mock pipeline when integrated). */
+  useEffect(() => {
+    if (!BACKEND_INTEGRATION || userRole !== 'RECRUITER' || !authToken || !jobIdsKey) {
+      if (BACKEND_INTEGRATION && userRole === 'RECRUITER' && !jobIdsKey) {
+        setApplicantsByJobId({});
+      }
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        jobs.map(async (j) => {
+          const jid = Number(j.id);
+          if (Number.isNaN(jid)) return null;
+          try {
+            const res = await api.applications.byJob({ job_id: jid, page: 1, page_size: 500 });
+            const apps = Array.isArray(res?.applications) ? res.applications : [];
+            return [String(j.id), apps.map(mapBackendApplicationRow)];
+          } catch {
+            return [String(j.id), []];
+          }
+        }),
+      );
+      if (cancelled) return;
+      const next = {};
+      for (const r of results) {
+        if (r) next[r[0]] = r[1];
+      }
+      setApplicantsByJobId(next);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authToken, userRole, jobIdsKey, jobs]);
+
+  /** Hydrate member connections + incoming invites from core backend after login. */
+  useEffect(() => {
+    if (!BACKEND_INTEGRATION || !authToken || userRole !== 'MEMBER') return undefined;
+    const mid = userProfile?.member_id ?? userProfile?.id;
+    if (mid == null || Number.isNaN(Number(mid))) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const uid = Number(mid);
+        const [listRaw, pendingRaw] = await Promise.all([
+          api.connections.list({ user_id: uid, page: 1, page_size: 200 }),
+          api.connections.pending({ user_id: uid, page: 1, page_size: 100 }),
+        ]);
+        if (cancelled) return;
+
+        const listData = unwrapApiEnvelope(listRaw);
+        const pendData = unwrapApiEnvelope(pendingRaw);
+        const apiConnected = Array.isArray(listData?.connections)
+          ? listData.connections.map(mapBackendConnectionRow)
+          : [];
+        const apiPendingInvites = Array.isArray(pendData?.requests)
+          ? pendData.requests.map(mapBackendPendingInvite)
+          : [];
+
+        setConnections((prev) => {
+          const outboundPending = prev.filter((c) => c.status === 'pending');
+          const connectedIds = new Set(apiConnected.map((c) => String(c.id)));
+          const keepPending = outboundPending.filter((p) => !connectedIds.has(String(p.id)));
+
+          if (REPLACE_SEED_CONNECTIONS) {
+            return [...apiConnected, ...keepPending];
+          }
+          const map = new Map();
+          for (const c of prev) map.set(String(c.id), c);
+          for (const c of apiConnected) map.set(String(c.id), c);
+          return Array.from(map.values());
+        });
+
+        if (REPLACE_SEED_CONNECTIONS) {
+          setIncomingInvites(apiPendingInvites);
+        } else if (apiPendingInvites.length) {
+          setIncomingInvites((prev) => {
+            const map = new Map();
+            for (const i of prev) map.set(String(i.id), i);
+            for (const i of apiPendingInvites) map.set(String(i.id), i);
+            return Array.from(map.values());
+          });
+        }
+      } catch {
+        /* keep local / seeded network */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authToken, userRole, userProfile?.member_id, userProfile?.id]);
 
   /** Merge DummyJSON + optional VITE_EXTRA_SEED_URL (e.g. Kaggle export hosted as JSON). */
   useEffect(() => {
@@ -370,6 +621,13 @@ export const MockDataProvider = ({ children }) => {
     let cancelled = false;
 
     (async () => {
+      const {
+        fetchOpenSourceSeed,
+        fetchExtraSeedFromUrl,
+        normalizeMergedJob,
+        normalizeMergedPost,
+        normalizeMergedConnection,
+      } = await import('../data/openSeedLoader');
       const extraUrl = import.meta.env.VITE_EXTRA_SEED_URL;
       if (extraUrl) {
         const extra = await fetchExtraSeedFromUrl(extraUrl);
@@ -398,6 +656,15 @@ export const MockDataProvider = ({ children }) => {
   }, []);
 
   const demoRecruiterAnalytics = useMemo(() => {
+    if (!DEMO_SEED_ENABLED) {
+      return {
+        topJobsByApplicationsMonth: [],
+        cityWiseApplicationsMonth: [],
+        lowTractionJobs: [],
+        clicksPerJob: [],
+        savedJobsSeries: [],
+      };
+    }
     return {
       topJobsByApplicationsMonth: [
         { title: 'Software Engineer', count: 120 },
@@ -445,7 +712,12 @@ export const MockDataProvider = ({ children }) => {
   }, []);
 
   const demoMemberAnalytics = useMemo(() => {
-    // Last 30 days-ish (simplified)
+    if (!DEMO_SEED_ENABLED) {
+      return {
+        profileViewsLast30Days: [],
+        applicationStatusBreakdown: [],
+      };
+    }
     const views = Array.from({ length: 30 }, (_, i) => ({
       name: `${i + 1}`,
       views: Math.max(0, Math.round(12 + 6 * Math.sin(i / 3) + (i % 5) * 2)),
@@ -463,37 +735,48 @@ export const MockDataProvider = ({ children }) => {
   }, []);
 
   const getRecruiterAnalytics = async ({ window = 'month', job_id } = {}) => {
+    const empty = demoRecruiterAnalytics;
     try {
       const [top, geo, jobsTop, saved] = await Promise.all([
         api.analytics.jobsTop({ window, metric: 'applications', limit: 10 }),
         api.analytics.geo({ window, job_id }),
         api.analytics.jobsTop({ window, metric: 'clicks', limit: 10 }),
-        api.analytics.funnel({ window, job_id }), // best available endpoint for engagement until saved-series exists
+        api.analytics.funnel({ window, job_id }),
       ]);
 
-      // Adapt to whatever backend returns; keep frontend resilient.
+      const clicksRaw = Array.isArray(jobsTop?.items) ? jobsTop.items : [];
+      const clicksPerJob = clicksRaw.map((x) => ({
+        title: x.title,
+        clicks: Number(x.count ?? x.clicks ?? 0),
+      }));
+
       return {
-        topJobsByApplicationsMonth: top?.items || demoRecruiterAnalytics.topJobsByApplicationsMonth,
-        cityWiseApplicationsMonth: geo?.items || demoRecruiterAnalytics.cityWiseApplicationsMonth,
-        lowTractionJobs: top?.low_traction || demoRecruiterAnalytics.lowTractionJobs,
-        clicksPerJob: jobsTop?.items || demoRecruiterAnalytics.clicksPerJob,
-        savedJobsSeries: saved?.saved_series || demoRecruiterAnalytics.savedJobsSeries,
+        topJobsByApplicationsMonth: top?.items ?? (DEMO_SEED_ENABLED ? empty.topJobsByApplicationsMonth : []),
+        cityWiseApplicationsMonth: geo?.items ?? (DEMO_SEED_ENABLED ? empty.cityWiseApplicationsMonth : []),
+        lowTractionJobs: top?.low_traction ?? (DEMO_SEED_ENABLED ? empty.lowTractionJobs : []),
+        clicksPerJob: clicksPerJob.length ? clicksPerJob : DEMO_SEED_ENABLED ? empty.clicksPerJob : [],
+        savedJobsSeries: saved?.saved_series ?? (DEMO_SEED_ENABLED ? empty.savedJobsSeries : []),
       };
     } catch {
-      return demoRecruiterAnalytics;
+      return empty;
     }
   };
 
   const getMemberAnalytics = async ({ member_id, window = '30d' } = {}) => {
+    const empty = demoMemberAnalytics;
     try {
-      const mid = member_id ?? memberKey;
+      const mid = Number(member_id != null ? member_id : userProfile?.member_id);
+      if (Number.isNaN(mid)) {
+        return empty;
+      }
       const res = await api.analytics.memberDashboard({ member_id: mid, window });
       return {
-        profileViewsLast30Days: res?.profile_views_series || demoMemberAnalytics.profileViewsLast30Days,
-        applicationStatusBreakdown: res?.application_status_breakdown || demoMemberAnalytics.applicationStatusBreakdown,
+        profileViewsLast30Days: res?.profile_views_series ?? (DEMO_SEED_ENABLED ? empty.profileViewsLast30Days : []),
+        applicationStatusBreakdown:
+          res?.application_status_breakdown ?? (DEMO_SEED_ENABLED ? empty.applicationStatusBreakdown : []),
       };
     } catch {
-      return demoMemberAnalytics;
+      return empty;
     }
   };
 
@@ -708,6 +991,41 @@ export const MockDataProvider = ({ children }) => {
   }, [userRole, userProfile?.displayName]);
 
   const addJob = async (job) => {
+    if (BACKEND_INTEGRATION) {
+      const rid = Number(userProfile?.recruiter_id ?? userProfile?.member_id);
+      const cid = Number(userProfile?.company_id);
+      if (Number.isNaN(rid) || Number.isNaN(cid)) {
+        throw new Error('Recruiter profile is missing company_id. Sign out and sign in again.');
+      }
+      const created = await api.jobs.create({
+        recruiter_id: rid,
+        company_id: cid,
+        title: job.title,
+        description: (job.description || '').trim() || '—',
+        employment_type: job.type || 'Full-time',
+        location: job.location || '',
+        work_mode: job.remote ? 'remote' : 'onsite',
+        skills_required: [],
+        seniority_level: null,
+        salary_min: null,
+        salary_max: null,
+      });
+      const row = mapBackendJobRow(
+        {
+          ...created,
+          company: job.company || userProfile?.company_name,
+          industry: job.industry,
+          description: job.description,
+          employment_type: job.type,
+          remote: !!job.remote,
+          applicants: 0,
+        },
+        0,
+      );
+      setJobs((prev) => [row, ...prev]);
+      return created;
+    }
+
     const localJob = {
       ...job,
       id: Date.now(),
@@ -717,103 +1035,145 @@ export const MockDataProvider = ({ children }) => {
       description: job.description || '',
     };
     setJobs((prev) => [localJob, ...prev]);
-
-    try {
-      const created = await api.jobs.create({
-        title: job.title,
-        company_name: job.company,
-        location: job.location,
-        employment_type: job.type,
-        remote: !!job.remote,
-      });
-      // If backend returns a canonical job_id, you can reconcile here later.
-      return created;
-    } catch {
-      return localJob;
-    }
+    return localJob;
   };
 
   const editJob = async (updatedJob) => {
-    setJobs((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
-    try {
-      await api.jobs.update({
-        job_id: updatedJob.id,
-        title: updatedJob.title,
-        location: updatedJob.location,
-        employment_type: updatedJob.type,
-        remote: !!updatedJob.remote,
-      });
-    } catch {
-      // ignore for now
+    if (BACKEND_INTEGRATION) {
+      const rid = Number(userProfile?.recruiter_id ?? userProfile?.member_id);
+      if (!Number.isNaN(rid)) {
+        await api.jobs.update({
+          job_id: Number(updatedJob.id),
+          recruiter_id: rid,
+          title: updatedJob.title,
+          description: updatedJob.description,
+          employment_type: updatedJob.type,
+          location: updatedJob.location,
+          work_mode: updatedJob.remote ? 'remote' : 'onsite',
+        });
+      }
     }
+    setJobs((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
   };
 
   const deleteJob = async (jobId) => {
+    if (BACKEND_INTEGRATION) {
+      const rid = Number(userProfile?.recruiter_id ?? userProfile?.member_id);
+      if (!Number.isNaN(rid)) {
+        await api.jobs.close({ job_id: Number(jobId), recruiter_id: rid });
+      }
+    }
     setJobs((prev) => prev.filter((j) => j.id !== jobId));
     setApplicantsByJobId((prev) => {
       const next = { ...prev };
       delete next[String(jobId)];
       return next;
     });
-    try {
-      await api.jobs.close({ job_id: jobId });
-    } catch {
-      // ignore for now
-    }
   };
 
-  const applyToJob = async (jobId, { resume_text, cover_letter } = {}) => {
-    setJobs((prev) => {
-      const j = prev.find((x) => x.id === jobId);
-      const priorApplicants = j?.applicants ?? 0;
-      const resumeSummary =
-        (resume_text || '').trim().slice(0, 1200) ||
-        'Application submitted via Easy Apply with your profile summary.';
+  const applyToJob = useCallback(
+    async (jobId, { resume_text, cover_letter } = {}) => {
+      const jid = typeof jobId === 'number' ? jobId : Number(jobId);
+      const job = jobs.find((x) => x.id === jobId || Number(x.id) === jid);
+      if (job?.hasApplied) {
+        return { ok: false, duplicate: true };
+      }
 
-      const live = {
-        id: `live-${Date.now()}`,
-        name: userProfile?.displayName || 'Member',
-        email: userProfile?.email || DEMO_MEMBER_EMAIL,
-        headline: 'Applied via job board',
-        resumeSummary,
-        status: 'New',
-        appliedAgo: 'Just now',
+      if (BACKEND_INTEGRATION) {
+        const mid = Number(userProfile?.member_id);
+        if (userRole !== 'MEMBER' || Number.isNaN(mid)) {
+          return { ok: false, error: new Error('Only signed-in members can apply.') };
+        }
+        try {
+          await api.applications.submit({
+            job_id: jid,
+            member_id: mid,
+            resume_text,
+            cover_letter,
+          });
+        } catch (e) {
+          if (isDuplicateApplicationError(e)) return { ok: false, duplicate: true };
+          return { ok: false, error: e };
+        }
+        setJobs((prev) =>
+          prev.map((x) =>
+            String(x.id) === String(jobId) || Number(x.id) === jid
+              ? { ...x, hasApplied: true, applicants: (x.applicants || 0) + 1 }
+              : x,
+          ),
+        );
+        return { ok: true };
+      }
+
+      if (STRICT_APPLICATIONS) {
+        return { ok: false, error: new Error('Enable backend integration to submit applications.') };
+      }
+
+      const commitApplicationLocally = () => {
+        setJobs((prev) => {
+          const j = prev.find((x) => x.id === jobId);
+          const priorApplicants = j?.applicants ?? 0;
+          const resumeSummary =
+            (resume_text || '').trim().slice(0, 1200) ||
+            'Application submitted via Easy Apply with your profile summary.';
+
+          const live = {
+            id: `live-${Date.now()}`,
+            name: userProfile?.displayName || 'Member',
+            email: userProfile?.email || '',
+            headline: 'Applied via job board',
+            resumeSummary,
+            status: 'submitted',
+            appliedAgo: 'Just now',
+          };
+
+          setApplicantsByJobId((ap) => {
+            const key = String(jobId);
+            const existing =
+              ap[key] ?? (DEMO_SEED_ENABLED ? generateApplicantsForJob(jobId, priorApplicants) : []);
+            return { ...ap, [key]: [live, ...existing] };
+          });
+
+          return prev.map((x) =>
+            x.id === jobId ? { ...x, hasApplied: true, applicants: (x.applicants || 0) + 1 } : x,
+          );
+        });
       };
 
-      setApplicantsByJobId((ap) => {
-        const key = String(jobId);
-        const existing = ap[key] ?? generateApplicantsForJob(jobId, priorApplicants);
-        return { ...ap, [key]: [live, ...existing] };
+      commitApplicationLocally();
+      return { ok: true };
+    },
+    [api, jobs, userProfile?.displayName, userProfile?.email, userProfile?.member_id, userRole, DEMO_SEED_ENABLED],
+  );
+
+  const updateApplicantStatus = useCallback(
+    async (jobId, applicantId, status) => {
+      const key = String(jobId);
+      setApplicantsByJobId((prev) => {
+        const list = prev[key];
+        if (!list) return prev;
+        return {
+          ...prev,
+          [key]: list.map((a) => (a.id === applicantId ? { ...a, status } : a)),
+        };
       });
-
-      return prev.map((x) =>
-        x.id === jobId ? { ...x, hasApplied: true, applicants: (x.applicants || 0) + 1 } : x,
-      );
-    });
-
-    try {
-      await api.applications.submit({
-        job_id: jobId,
-        member_id: memberKey,
-        resume_text,
-        cover_letter,
-      });
-    } catch {
-      // keep UI responsive even if backend is down
-    }
-  };
-
-  const updateApplicantStatus = useCallback((jobId, applicantId, status) => {
-    const key = String(jobId);
-    setApplicantsByJobId((prev) => {
-      const list = prev[key];
-      if (!list) return prev;
-      return {
-        ...prev,
-        [key]: list.map((a) => (a.id === applicantId ? { ...a, status } : a)),
-      };
-    });
-  }, []);
+      if (BACKEND_INTEGRATION && userRole === 'RECRUITER') {
+        const rid = Number(userProfile?.recruiter_id ?? userProfile?.member_id);
+        if (!Number.isNaN(rid)) {
+          try {
+            await api.applications.updateStatus({
+              application_id: Number(applicantId),
+              recruiter_id: rid,
+              status,
+            });
+          } catch {
+            /* optimistic UI; recruiter can refresh */
+          }
+        }
+      }
+    },
+    [api, userRole, userProfile?.recruiter_id, userProfile?.member_id],
+  );
 
   const requestConnection = async (userId) => {
     setConnections((prev) =>
@@ -832,27 +1192,54 @@ export const MockDataProvider = ({ children }) => {
     );
   }, []);
 
-  const acceptIncomingInvite = useCallback((inviteId) => {
-    setIncomingInvites((prev) => {
-      const inv = prev.find((i) => i.id === inviteId);
-      if (!inv) return prev;
+  const acceptIncomingInvite = useCallback(
+    async (inviteId) => {
+      const inv = incomingInvitesRef.current.find((i) => i.id === inviteId);
+      if (!inv) return;
+      if (BACKEND_INTEGRATION && inv.request_id != null && userRole === 'MEMBER') {
+        const rid = Number(memberKey);
+        if (!Number.isNaN(rid)) {
+          try {
+            await api.connections.accept({ request_id: inv.request_id, receiver_id: rid });
+          } catch {
+            return;
+          }
+        }
+      }
+      setIncomingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+      const peerId = inv.requester_id != null ? inv.requester_id : `conn-${inviteId}`;
       setConnections((c) => [
-        ...c,
+        ...c.filter((x) => String(x.id) !== String(peerId)),
         {
-          id: `conn-${Date.now()}`,
+          id: peerId,
           name: inv.name,
           headline: inv.headline,
-          mutual: inv.mutual ?? 5,
+          mutual: inv.mutual ?? 0,
           status: 'connected',
         },
       ]);
-      return prev.filter((i) => i.id !== inviteId);
-    });
-  }, []);
+    },
+    [api, memberKey, userRole],
+  );
 
-  const declineIncomingInvite = useCallback((inviteId) => {
-    setIncomingInvites((prev) => prev.filter((i) => i.id !== inviteId));
-  }, []);
+  const declineIncomingInvite = useCallback(
+    async (inviteId) => {
+      const inv = incomingInvitesRef.current.find((i) => i.id === inviteId);
+      if (!inv) return;
+      if (BACKEND_INTEGRATION && inv.request_id != null && userRole === 'MEMBER') {
+        const rid = Number(memberKey);
+        if (!Number.isNaN(rid)) {
+          try {
+            await api.connections.reject({ request_id: inv.request_id, receiver_id: rid });
+          } catch {
+            return;
+          }
+        }
+      }
+      setIncomingInvites((prev) => prev.filter((i) => i.id !== inviteId));
+    },
+    [api, memberKey, userRole],
+  );
 
   const toggleSaveJob = useCallback((jobId) => {
     const id = typeof jobId === 'number' ? jobId : Number(jobId);
@@ -913,15 +1300,103 @@ export const MockDataProvider = ({ children }) => {
     setUserProfile(null);
   }, [clearMemberStoredProfile]);
 
-  const login = async (role, { email, password, displayName: explicitDisplayName } = {}) => {
-    let authRes = null;
-    try {
-      authRes = await api.auth.login({ role, email, password });
-    } catch (err) {
-      if (REQUIRE_BACKEND_AUTH) {
-        throw err;
+  const saveMemberProfileRemote = useCallback(
+    async (next) => {
+      if (!BACKEND_INTEGRATION || !authToken || userRole !== 'MEMBER' || userProfile?.member_id == null) {
+        return { ok: true, skipped: true };
       }
-      authRes = null;
+      try {
+        const skillsArr = (next.skills || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const loc = (next.location || '').trim();
+        const cityPart = loc.split(',')[0]?.trim() || undefined;
+        await api.members.update({
+          member_id: Number(userProfile.member_id),
+          first_name: next.firstName,
+          last_name: next.lastName,
+          headline: next.headline || undefined,
+          about: next.about || undefined,
+          skills: skillsArr.length ? skillsArr : undefined,
+          phone: (next.phone || '').trim() || undefined,
+          location_city: cityPart,
+          profile_photo_url: next.profilePhotoUrl?.startsWith('http') ? next.profilePhotoUrl : undefined,
+        });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e };
+      }
+    },
+    [api, authToken, userRole, userProfile?.member_id],
+  );
+
+  const login = async (
+    role,
+    {
+      email,
+      password,
+      displayName: explicitDisplayName,
+      isSignup,
+      phone,
+      city,
+      companyName,
+      companyIndustry,
+    } = {},
+  ) => {
+    const em = (email || '').trim();
+    const unauthApi = makeApi({ getAuthToken: () => null });
+
+    if (isSignup && !BACKEND_INTEGRATION) {
+      throw new Error('Create account requires the API. Set VITE_BACKEND_INTEGRATION=true in frontend/.env.');
+    }
+
+    /** Populated after successful `POST /members/create` or `POST /recruiters/create` (includes JWT once DB row is committed). */
+    let signupSession = null;
+    if (isSignup && BACKEND_INTEGRATION) {
+      if (!password) throw new Error('Password is required.');
+      const { first, last } = splitDisplayName((explicitDisplayName || '').trim() || displayNameFromEmail(em));
+      try {
+        if (role === 'MEMBER') {
+          signupSession = await unauthApi.members.create({
+            first_name: first,
+            last_name: last,
+            email: em,
+            password,
+            phone: (phone || '').trim() || undefined,
+            location_city: (city || '').trim() || undefined,
+          });
+        } else {
+          const cname = (companyName || '').trim();
+          if (!cname) throw new Error('Company name is required for recruiter registration.');
+          signupSession = await unauthApi.recruiters.create({
+            first_name: first,
+            last_name: last,
+            email: em,
+            password,
+            phone: (phone || '').trim() || undefined,
+            company_name: cname,
+            company_industry: (companyIndustry || '').trim() || undefined,
+          });
+        }
+      } catch (err) {
+        if (err?.status === 409) throw new Error('An account with this email already exists.');
+        throw new Error(formatRegisterError(err));
+      }
+    }
+
+    let authRes = null;
+    if (signupSession?.token) {
+      authRes = signupSession;
+    } else {
+      try {
+        authRes = await unauthApi.auth.login({ role, email: em, password });
+      } catch (err) {
+        if (REQUIRE_BACKEND_AUTH) {
+          throw err;
+        }
+        authRes = null;
+      }
     }
 
     const token =
@@ -931,83 +1406,86 @@ export const MockDataProvider = ({ children }) => {
       authRes?.jwt ||
       authRes?.data?.token ||
       null;
-    if (token) setAuthToken(token);
 
     if (REQUIRE_BACKEND_AUTH && !token) {
       const msg = authRes?.message || authRes?.error || 'Login failed';
       throw new Error(typeof msg === 'string' ? msg : 'Login failed');
     }
 
-    const resolvedEmail =
-      (email || '').trim() ||
-      authRes?.email ||
-      authRes?.user?.email ||
-      (role === 'RECRUITER' ? DEMO_RECRUITER_EMAIL : DEMO_MEMBER_EMAIL);
-
     let me = null;
     if (token) {
-      try {
-        me = await api.auth.me();
-      } catch {
-        me = null;
+      const apiWithToken = makeApi({ getAuthToken: () => token });
+      if (REQUIRE_BACKEND_AUTH) {
+        try {
+          me = await apiWithToken.auth.me();
+        } catch (err) {
+          setAuthToken(null);
+          throw new Error(err?.message || 'Could not verify your session. Check the API and sign in again.');
+        }
+        if (!me) {
+          setAuthToken(null);
+          throw new Error('Could not load your account. Try signing in again.');
+        }
+      } else {
+        try {
+          me = await apiWithToken.auth.me();
+        } catch {
+          me = null;
+        }
       }
+      setAuthToken(token);
     }
 
-    let prev = null;
-    try {
-      const raw = localStorage.getItem('userProfile');
-      prev = raw ? JSON.parse(raw) : null;
-    } catch {
-      /* ignore */
+    const resolvedEmail =
+      em ||
+      (typeof me?.email === 'string' && me.email.trim() ? me.email.trim() : '') ||
+      authRes?.email ||
+      authRes?.user?.email ||
+      '';
+
+    const fromLoginNames = authRes
+      ? [authRes.first_name, authRes.last_name].filter(Boolean).join(' ').trim()
+      : '';
+
+    /** Profile display fields: server truth only (no localStorage merge, no email-to-name guessing). */
+    let displayName = (
+      (me?.displayName || me?.name || me?.full_name || '').trim() ||
+      fromLoginNames ||
+      (isSignup ? (explicitDisplayName || '').trim() : '')
+    ).trim();
+    if (!displayName && resolvedEmail) {
+      displayName = resolvedEmail;
     }
 
-    const sameUser =
-      prev &&
-      prev.email &&
-      prev.role === role &&
-      String(prev.email).toLowerCase() === String(resolvedEmail).toLowerCase();
-
-    let displayName = (explicitDisplayName || '').trim();
-    if (!displayName) {
-      displayName =
-        (me?.displayName ||
-          me?.name ||
-          me?.full_name ||
-          me?.user?.displayName ||
-          authRes?.displayName ||
-          '').trim();
-    }
-    if (!displayName) {
-      if (sameUser && prev.displayName) displayName = prev.displayName;
-      else if (String(resolvedEmail).toLowerCase() === DEMO_MEMBER_EMAIL.toLowerCase()) displayName = DEMO_MEMBER_NAME;
-      else if (String(resolvedEmail).toLowerCase() === DEMO_RECRUITER_EMAIL.toLowerCase()) displayName = DEMO_RECRUITER_NAME;
-      else displayName = displayNameFromEmail(resolvedEmail);
-    }
-
-    const headline =
-      sameUser && prev.headline
-        ? prev.headline
-        : (me?.headline || me?.title || authRes?.headline || '').trim() ||
-          (role === 'RECRUITER'
-            ? 'Recruiting & talent · linkedlnDS'
-            : 'Professional · Edit your profile to add a headline');
+    const headline = (me?.headline || me?.title || authRes?.headline || '').trim();
 
     const idPatch =
       me?.id != null
         ? { id: me.id }
         : authRes?.user?.id != null
           ? { id: authRes.user.id }
-          : {};
-    const memberPatch =
-      me?.member_id != null
-        ? { member_id: me.member_id }
-        : me?.memberId != null
-          ? { member_id: me.memberId }
-          : authRes?.member_id != null
-            ? { member_id: authRes.member_id }
-            : {};
+          : role === 'MEMBER' && (me?.member_id ?? authRes?.member_id) != null
+            ? { id: me.member_id ?? authRes.member_id }
+            : role === 'RECRUITER' && (me?.recruiter_id ?? authRes?.recruiter_id) != null
+              ? { id: me.recruiter_id ?? authRes.recruiter_id }
+              : {};
 
-    setUserProfile({ displayName, email: resolvedEmail, role, headline, ...idPatch, ...memberPatch });
+    let memberPatch = {};
+    if (role === 'MEMBER') {
+      const mid = me?.member_id ?? me?.memberId ?? authRes?.member_id;
+      if (mid != null) memberPatch = { member_id: mid };
+    } else if (role === 'RECRUITER') {
+      const rid = me?.recruiter_id ?? authRes?.recruiter_id ?? me?.member_id;
+      const cid = me?.company_id ?? authRes?.company_id;
+      if (rid != null) memberPatch = { recruiter_id: rid, member_id: rid };
+      if (cid != null) memberPatch = { ...memberPatch, company_id: cid };
+    }
+
+    let profile = { displayName, email: resolvedEmail, role, headline, ...idPatch, ...memberPatch };
+    if (token && BACKEND_INTEGRATION) {
+      profile = await hydrateProfileAfterLogin(role, token, profile);
+    }
+    setUserProfile(profile);
     setUserRole(role);
   };
 
@@ -1030,6 +1508,7 @@ export const MockDataProvider = ({ children }) => {
         login,
         logout,
         updateUserProfile,
+        saveMemberProfileRemote,
         posts,
         addPost,
         updatePost,

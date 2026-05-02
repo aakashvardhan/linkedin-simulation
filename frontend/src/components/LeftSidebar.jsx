@@ -22,11 +22,7 @@ const LeftSidebar = () => {
   }, []);
 
   const displayName = userProfile?.displayName?.trim() || 'Your profile';
-  const headline =
-    userProfile?.headline?.trim() ||
-    (userProfile?.role === 'RECRUITER'
-      ? 'Recruiting & talent · linkedlnDS'
-      : 'Professional · Edit your profile to add a headline');
+  const headline = userProfile?.headline?.trim() || 'Add a headline in your profile';
 
   const avatarSrc = useMemo(() => {
     const email = userProfile?.email;

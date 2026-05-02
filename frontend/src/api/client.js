@@ -1,11 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 15000;
 
-function withTimeout(promise, timeoutMs) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  return { controller, promise: Promise.resolve(promise).finally(() => clearTimeout(t)) };
-}
-
 export class ApiError extends Error {
   constructor(message, { status, code, details } = {}) {
     super(message);
@@ -17,7 +11,7 @@ export class ApiError extends Error {
 }
 
 export function createApiClient({
-  baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
+  baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
   getAuthToken,
 } = {}) {
   async function request(path, { method = 'GET', body, headers, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
@@ -34,14 +28,11 @@ export function createApiClient({
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     };
 
-    const { controller, promise } = withTimeout(
-      fetch(url, { ...fetchOptions, signal: controller.signal }),
-      timeoutMs,
-    );
-
+    const abortCtl = new AbortController();
+    const t = setTimeout(() => abortCtl.abort(), timeoutMs);
     let res;
     try {
-      res = await promise;
+      res = await fetch(url, { ...fetchOptions, signal: abortCtl.signal }).finally(() => clearTimeout(t));
     } catch (err) {
       if (err?.name === 'AbortError') {
         throw new ApiError('Request timed out', { code: 'TIMEOUT' });
@@ -54,7 +45,16 @@ export function createApiClient({
     const data = isJson ? await res.json().catch(() => null) : await res.text().catch(() => null);
 
     if (!res.ok) {
-      const msg = (data && (data.message || data.error)) || `HTTP ${res.status}`;
+      let msg = `HTTP ${res.status}`;
+      if (data && typeof data === 'object') {
+        if (data.error && typeof data.error === 'object' && data.error.message) {
+          msg = String(data.error.message);
+        } else if (typeof data.message === 'string') {
+          msg = data.message;
+        } else if (typeof data.error === 'string') {
+          msg = data.error;
+        }
+      }
       throw new ApiError(msg, { status: res.status, details: data });
     }
 

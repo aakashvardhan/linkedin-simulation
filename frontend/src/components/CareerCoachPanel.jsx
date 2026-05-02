@@ -8,21 +8,15 @@ import {
   FaSyncAlt,
   FaTimes,
 } from 'react-icons/fa';
-import * as pdfjs from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { makeApi } from '../api';
 import { buildCareerCoachPlan } from '../utils/careerCoach';
+import { loadPdfJs } from '../utils/loadPdfJs';
 
-let pdfWorkerReady = false;
-function ensurePdfWorker() {
-  if (!pdfWorkerReady) {
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
-    pdfWorkerReady = true;
-  }
-}
+/** Local rule-based coach (no API). Off by default — set VITE_CAREER_COACH_OFFLINE=true to allow. */
+const CAREER_COACH_OFFLINE = import.meta.env.VITE_CAREER_COACH_OFFLINE === 'true';
 
 async function parsePdfToText(arrayBuffer) {
-  ensurePdfWorker();
+  const pdfjs = await loadPdfJs();
   const doc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
   let text = '';
   const maxPages = Math.min(doc.numPages || 0, 12);
@@ -226,7 +220,14 @@ export default function CareerCoachPanel({
           return;
         }
       } catch {
-        // fall through to local
+        // fall through
+      }
+
+      if (!CAREER_COACH_OFFLINE) {
+        setCoachError(
+          'Career coach API did not return data. Ensure /ai/career-coach or /ai/request is available, or set VITE_CAREER_COACH_OFFLINE=true for local-only suggestions.',
+        );
+        return;
       }
 
       const plan = buildCareerCoachPlan({
@@ -255,7 +256,7 @@ export default function CareerCoachPanel({
     if (!file) return;
     const maxBytes = 7 * 1024 * 1024;
     if (file.size > maxBytes) {
-      window.alert('Please upload a resume under 7 MB for this demo.');
+      window.alert('Please upload a resume under 7 MB.');
       return;
     }
 

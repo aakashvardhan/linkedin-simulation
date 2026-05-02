@@ -44,10 +44,11 @@ const RecruiterJobs = () => {
     );
   }, [applicantsModalJob, applicantsByJobId, applicantSearch]);
 
-  const handleCreateJob = (e) => {
+  const handleCreateJob = async (e) => {
     e.preventDefault();
-    if (newJob.title && newJob.location) {
-      addJob(newJob);
+    if (!newJob.title || !newJob.location) return;
+    try {
+      await addJob(newJob);
       setNewJob({
         title: '',
         company: 'My Startup',
@@ -57,6 +58,8 @@ const RecruiterJobs = () => {
         industry: 'Technology',
         description: '',
       });
+    } catch (err) {
+      window.alert(err?.message || 'Could not create job. Check that you are signed in and the API is running.');
     }
   };
 
@@ -91,43 +94,19 @@ const RecruiterJobs = () => {
     });
   }, [jobs, search, industryFilter]);
 
-  // Stream Simulation (replace with WebSocket later)
+  /** Rank current applicants locally (replace with real AI service when available). */
   const triggerCandidateMatching = (job) => {
     setSelectedJobForMatching(job);
     setMatchedCandidates([]);
     setExpandedCandidateId(null);
     setEditedEmails({});
-    setCopilotState('parsing');
-    setCopilotLog(['Starting AI candidate matching…']);
-
-    setTimeout(() => {
-      setCopilotLog(prev => [...prev, '✓ Connected.']);
-      setCopilotLog(prev => [...prev, `Analyzing requirements for "${job.title}"…`]);
-
-      setTimeout(() => {
-        const applicants = applicantsByJobId[String(job.id)] ?? [];
-        setCopilotState('matching');
-        setCopilotLog(prev => [...prev, '✓ Job requirements analyzed.']);
-        setCopilotLog(prev => [...prev, `Scanning ${applicants.length} applicant profiles…`]);
-
-        setTimeout(() => {
-           setCopilotState('generating');
-           setCopilotLog(prev => [...prev, '✓ Top candidates identified.']);
-           setCopilotLog(prev => [...prev, 'Generating personalized outreach…']);
-
-           setTimeout(() => {
-             const result = generateCandidateMatches(
-               job,
-               applicants,
-               userProfile?.displayName || 'Recruiter',
-             );
-             setMatchedCandidates(result.candidates);
-             setCopilotLog(prev => [...prev, `✓ Complete. ${result.candidates.length} candidates matched.`]);
-             setCopilotState('results');
-           }, 2000);
-        }, 2000);
-      }, 2000);
-    }, 1500);
+    const applicants = applicantsByJobId[String(job.id)] ?? [];
+    setCopilotState('matching');
+    setCopilotLog([`Ranking ${applicants.length} applicant(s) for “${job.title}”…`]);
+    const result = generateCandidateMatches(job, applicants, userProfile?.displayName || 'Recruiter');
+    setMatchedCandidates(result.candidates);
+    setCopilotLog((prev) => [...prev, `Done — ${result.candidates.length} candidate(s) ranked.`]);
+    setCopilotState('results');
   };
 
   const resetCopilot = () => {
@@ -601,9 +580,11 @@ const RecruiterJobs = () => {
               )}
             </div>
 
-            <div style={{ padding: '12px 20px', borderTop: '1px solid #e0e0df', background: '#f9f9f9', fontSize: '12px', color: '#666' }}>
-              Demo data is generated locally. When members apply from the Jobs page, they appear at the top as &quot;New&quot;. Status changes stay in this session until refresh.
-            </div>
+            {import.meta.env.VITE_DEMO_SEED !== 'false' ? (
+              <div style={{ padding: '12px 20px', borderTop: '1px solid #e0e0df', background: '#f9f9f9', fontSize: '12px', color: '#666' }}>
+                Sample applicants are generated when demo seeding is on. New applies from the Jobs page appear as &quot;New&quot; for this session.
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

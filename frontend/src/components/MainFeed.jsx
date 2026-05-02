@@ -257,7 +257,7 @@ const MainFeed = () => {
     } else {
       snippet = post.content.length > 220 ? `${post.content.slice(0, 220)}…` : post.content;
     }
-    const line = `${post.author}: ${snippet}\n— shared from linkedlnDS (demo)`;
+    const line = `${post.author}: ${snippet}\n— shared from your feed`;
     try {
       await navigator.clipboard.writeText(line);
       showToast('Copied to clipboard — paste anywhere to send');

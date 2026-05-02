@@ -1,138 +1,74 @@
-# linkedlnDS
+# linkedInDS — full stack (FastAPI + React)
 
-**Distributed LinkedIn-style client** — a demo UI for coursework and team integration: member **feed**, **jobs**, **network**, **messaging**, **notifications**, **recruiter dashboard**, and a floating **Copilot** panel. Runs fully on **local mock data**; switches to a real backend via `**VITE_API_BASE_URL`** with graceful fallback.
+Integrated SPA + core backend (MySQL). Anyone can run locally with Docker for databases + two terminals for API and UI.
 
----
+## Prerequisites
 
-## Features
-
-
-| Area               | What’s included                                                                                      |
-| ------------------ | ---------------------------------------------------------------------------------------------------- |
-| **Auth & landing** | Public landing, modal sign-in / sign-up, demo accounts, profile name + photo (local persistence)     |
-| **Member**         | Home feed with composer, edit/delete **own** posts, network, jobs, messaging, notifications, profile |
-| **Recruiter**      | Dashboard (Recharts), job CRUD, recruiter profile, **moderation** (edit/delete any feed post in UI)  |
-| **Copilot**        | Floating chat widget (placeholder replies; ready to wire to WebSocket / agent service)               |
-| **Recruiter jobs** | Sidebar **Agentic Copilot** simulator (timed steps + log; replace with real AI backend)              |
-| **Data**           | Kaggle-style JSON seeds, optional **DummyJSON** merge, optional `**VITE_EXTRA_SEED_URL`**            |
-| **Analytics**      | Member + recruiter charts; tries live API, falls back to demo series if the server is down           |
-
-
----
-
-## Tech stack
-
-- **React 19** · **Vite 8** · **React Router 7** · **Recharts** · **react-icons**
-
----
+- **Python 3.11+** (backend)
+- **Node 18+** and npm (frontend)
+- **Docker Desktop** (recommended: MySQL, MongoDB, Redis, Kafka via `backend/docker-compose.yml`)
 
 ## Quick start
 
-**Requirements:** Node.js **20+** and npm.
-
-From the **repository root**:
+### 1. Backend dependencies & env
 
 ```bash
-git clone <your-repo-url>
-cd <repo-folder>
-npm install    # also installs frontend/ via postinstall
-npm run dev
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env        # edit MYSQL_* and JWT_SECRET
 ```
 
-Open **[http://localhost:5173](http://localhost:5173)**.
+Start infrastructure (from `backend/`):
 
-Or from `**frontend/`** only:
+```bash
+docker compose up -d mysql mongo redis
+```
+
+Optional one-shot (builds API container too — see script):
+
+```bash
+chmod +x scripts/local-full-stack.sh
+./scripts/local-full-stack.sh   # from repo root
+```
+
+Run the API locally:
+
+```bash
+cd backend
+source .venv/bin/activate
+python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+- Health: <http://127.0.0.1:8000/health>
+- OpenAPI: <http://127.0.0.1:8000/docs>
+
+### 2. Frontend
 
 ```bash
 cd frontend
+cp .env.example .env          # set VITE_API_BASE_URL=http://127.0.0.1:8000
 npm install
 npm run dev
 ```
 
-### Demo sign-in
+Open the printed URL (often <http://localhost:5173>). After changing `.env`, restart Vite.
 
-Use the accounts called out on the landing page, for example:
+### 3. First account
 
+Use **Create account** in the app (persists to MySQL when `VITE_BACKEND_INTEGRATION=true`), or run optional seed scripts — see `backend/README.md`.
 
-| Role      | Email (demo)             |
-| --------- | ------------------------ |
-| Member    | `pratiksha@demo.linkdln` |
-| Recruiter | `sneha@demo.linkdln`     |
+## Configuration notes
 
+- **CORS:** With empty `CORS_ORIGINS`, local dev allows `localhost` / `127.0.0.1` on any port (Vite may use 5174+). For production, set `CORS_ORIGINS` on the backend.
+- **Integration contract:** `docs/INTEGRATION.md`
 
-Password can be anything in **demo / local** mode.
+## Repo layout
 
----
-
-## Scripts (repo root)
-
-
-| Command           | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `npm install`     | Installs root + `**frontend/`** dependencies |
-| `npm run dev`     | Vite dev server                              |
-| `npm run build`   | Production build → `frontend/dist/`          |
-| `npm run lint`    | ESLint                                       |
-| `npm run preview` | Preview production build                     |
-
-
----
-
-## Configuration
-
-Copy `**frontend/.env.example`** → `**frontend/.env**`.
-
-
-| Variable              | Description                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `VITE_API_BASE_URL`   | API gateway (default `http://localhost:8080`)                                          |
-| `VITE_OPEN_SEED`      | Set to `false` to skip DummyJSON merge                                                 |
-| `VITE_EXTRA_SEED_URL` | URL returning JSON: `{ "jobs": [], "posts": [], "connections": [] }` (arrays optional) |
-
-
----
-
-## Backend integration
-
-The frontend expects a gateway at `VITE_API_BASE_URL`. Method names and paths are centralized in:
-
-`**[frontend/src/api/index.js](frontend/src/api/index.js)**`
-
-Includes **auth**, **members**, **jobs**, **applications**, **messaging**, **connections**, **analytics** (`/events/ingest`, dashboards), and **AI** stubs. The HTTP client (`frontend/src/api/client.js`) sends JSON and `**Authorization: Bearer <token>`** when a token is stored after login.
-
-Deeper UI ↔ data notes (Kafka-style jobs flow, copilot hooks) live in `**frontend/README.md`**.
-
----
-
-## Repository layout
-
-```
-├── frontend/                 # Vite + React application
-│   ├── src/
-│   │   ├── api/              # API client + endpoint map
-│   │   ├── components/       # Navbar, sidebars, feed, AgentWidget, BrandMark, …
-│   │   ├── context/          # MockDataContext (global state + API fallback)
-│   │   ├── data/             # openSeedLoader, kaggle/*.json seeds
-│   │   ├── layout/           # MainLayout
-│   │   └── pages/            # Login, Home, Jobs, Recruiter*, …
-│   └── .env.example
-├── datasets/                 # Dataset notes (e.g. Kaggle seed sources)
-├── scripts/
-│   └── kaggle_download_sample.py   # Optional: local Kaggle → JSON
-├── package.json              # Root scripts + postinstall → frontend
-└── README.md
-```
-
----
-
-## Team workflow
-
-1. Clone the repo and run `**npm install**` / `**npm run dev**`.
-2. Backend team implements routes aligned with `**frontend/src/api/index.js**`.
-3. Point `**VITE_API_BASE_URL**` at your gateway; keep `**frontend/README.md**` open for feature-specific integration notes.
-
----
-
-## License
-
-Add a `LICENSE` file for your course or org if required.
+| Path | Role |
+|------|------|
+| `backend/` | FastAPI, SQLAlchemy, JWT auth |
+| `frontend/` | Vite + React SPA |
+| `docs/` | Partner integration notes |
+| `scripts/` | Helper scripts (e.g. local stack) |

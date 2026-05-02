@@ -15,22 +15,19 @@ import {
 } from 'react-icons/fa';
 import { extractSkillsFromResume, calculateMatchScore } from '../utils/unitFunctions';
 import CareerCoachPanel from '../components/CareerCoachPanel';
-import * as pdfjs from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { loadPdfJs } from '../utils/loadPdfJs';
 
 // Job search, apply, and client-side resume matching.
 const Jobs = () => {
-  useEffect(() => {
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
-  }, []);
   const { jobs, applyToJob, toggleSaveJob, isJobSaved, userProfile, authToken } = useMockData();
   const [searchTerm, setSearchTerm] = useState('');
   const [isRemoteOnly, setIsRemoteOnly] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
 
-  // Application Modal States
+  // Application modal (calls `POST /applications/submit` via MockDataContext.applyToJob)
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [appState, setAppState] = useState('idle'); // idle | submitting | success
+  const [appState, setAppState] = useState('idle'); // idle | submitting | success | duplicate | error
+  const [submitError, setSubmitError] = useState('');
   const [resumeText, setResumeText] = useState('');
   const [coverLetter, setCoverLetter] = useState('');
 
@@ -38,7 +35,7 @@ const Jobs = () => {
   const [typeFilter, setTypeFilter] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
 
-  // Resume matching (demo): parse skills from pasted resume and rank jobs.
+  // Client-side resume match: parse skills from pasted resume and rank jobs.
   const [resumeMatchText, setResumeMatchText] = useState('');
   const [resumeSkills, setResumeSkills] = useState([]);
   const [resumeMatchResults, setResumeMatchResults] = useState([]);
@@ -61,7 +58,7 @@ const Jobs = () => {
   const buildApplicationTemplate = () => {
     const name = userProfile?.displayName || 'Your Name';
     const headline = userProfile?.headline || 'Your professional headline';
-    return `${name}\n${headline}\n\nExperience: Summarize roles and impact (edit in Profile).\nSkills: List key technologies and domains.\nEducation: Degree, institution, year.\n\n— Standard application template (demo). Fill in from your profile or paste a full resume below.`;
+    return `${name}\n${headline}\n\nExperience: Summarize roles and impact (edit in Profile).\nSkills: List key technologies and domains.\nEducation: Degree, institution, year.\n\nFill in from your profile or paste a full resume below.`;
   };
 
   const filteredJobs = useMemo(() => {
@@ -122,6 +119,7 @@ const Jobs = () => {
   };
 
   const parsePdfToText = async (arrayBuffer) => {
+    const pdfjs = await loadPdfJs();
     const doc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
     let text = '';
     const maxPages = Math.min(doc.numPages || 0, 12);
@@ -144,7 +142,7 @@ const Jobs = () => {
     setResumeFileName(file.name || '');
     const maxBytes = 7 * 1024 * 1024;
     if (file.size > maxBytes) {
-      window.alert('Please upload a resume under 7 MB for this demo.');
+      window.alert('Please upload a resume under 7 MB.');
       return;
     }
 
@@ -157,7 +155,7 @@ const Jobs = () => {
         const txt = await file.text();
         setResumeMatchText(txt);
         // Auto-run match after upload
-        setTimeout(() => handleParseResumeAndMatch(), 0);
+        queueMicrotask(() => handleParseResumeAndMatch());
         return;
       }
 
@@ -169,7 +167,7 @@ const Jobs = () => {
           return;
         }
         setResumeMatchText(txt);
-        setTimeout(() => handleParseResumeAndMatch(), 0);
+        queueMicrotask(() => handleParseResumeAndMatch());
         return;
       }
 
@@ -190,6 +188,7 @@ const Jobs = () => {
   const handleApplyClick = () => {
     if (selectedJob) {
       setIsModalOpen(true);
+      setSubmitError('');
       setAppState('idle');
       setResumeText(buildApplicationTemplate());
       setCoverLetter(
@@ -198,25 +197,35 @@ const Jobs = () => {
     }
   };
 
-  const handleKafkaSubmit = async (e) => {
+  const handleApplicationSubmit = async (e) => {
     e.preventDefault();
+    if (!selectedJob) return;
+    setSubmitError('');
     setAppState('submitting');
-    
-    // Simulate asynchronous submit pipeline
-    setTimeout(() => {
-      // Failure mode: prevent duplicate application submissions
-      if (selectedJob.hasApplied) {
+
+    try {
+      const result = await applyToJob(selectedJob.id, {
+        resume_text: resumeText,
+        cover_letter: coverLetter,
+      });
+      if (result.duplicate) {
         setAppState('duplicate');
-      } else {
-        applyToJob(selectedJob.id, { resume_text: resumeText, cover_letter: coverLetter });
-        setAppState('success');
-        
-        // Auto close modal after showing success notification
-        setTimeout(() => {
-          setIsModalOpen(false);
-        }, 2500);
+        return;
       }
-    }, 2000);  
+      if (!result.ok) {
+        const msg =
+          result.error?.message ||
+          (typeof result.error === 'string' ? result.error : null) ||
+          'Could not submit application. Check the API gateway and try again.';
+        setSubmitError(msg);
+        setAppState('error');
+        return;
+      }
+      setAppState('success');
+    } catch (err) {
+      setSubmitError(err?.message || 'Unexpected error while submitting.');
+      setAppState('error');
+    }
   };
 
   return (
@@ -862,7 +871,7 @@ const Jobs = () => {
 
       </div>
 
-      {/* Async Kafka Application Modal */}
+      {/* Application submit modal → gateway `POST /applications/submit` */}
       {isModalOpen && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ backgroundColor: '#fff', width: '500px', borderRadius: '8px', display: 'flex', flexDirection: 'column', padding: '24px', position: 'relative' }}>
@@ -872,7 +881,7 @@ const Jobs = () => {
                 <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>Apply to {selectedJob?.company}</h2>
                 <p style={{ fontSize: '14px', color: '#666', marginBottom: '24px' }}>Submit your application to start the review process.</p>
                 
-                <form onSubmit={handleKafkaSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <form onSubmit={handleApplicationSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '14px', fontWeight: '600' }}>
                     Parsed Resume (Text)
                     <textarea 
@@ -905,8 +914,8 @@ const Jobs = () => {
             {appState === 'submitting' && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0', gap: '16px' }}>
                  <FaSpinner className="spin-animation" size={48} color="#0A66C2" />
-                 <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#0A66C2' }}>Processing Event...</h2>
-                 <p style={{ fontSize: '14px', color: '#666', textAlign: 'center' }}>Submitting your application…<br/>Please do not close this window.</p>
+                 <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#0A66C2' }}>Submitting…</h2>
+                 <p style={{ fontSize: '14px', color: '#666', textAlign: 'center' }}>Sending your application to the gateway.<br/>Please keep this window open.</p>
               </div>
             )}
 
@@ -915,6 +924,22 @@ const Jobs = () => {
                  <FaCheckCircle size={48} color="#004182" />
                  <h2 style={{ fontSize: '20px', fontWeight: '600', color: '#004182' }}>Application Received!</h2>
                  <p style={{ fontSize: '14px', color: '#666', textAlign: 'center' }}>Your application was submitted successfully.</p>
+                 <button
+                   type="button"
+                   onClick={() => setIsModalOpen(false)}
+                   style={{
+                     marginTop: '8px',
+                     backgroundColor: '#0A66C2',
+                     color: '#fff',
+                     border: 'none',
+                     padding: '10px 24px',
+                     borderRadius: '24px',
+                     fontWeight: '600',
+                     cursor: 'pointer',
+                   }}
+                 >
+                   Close
+                 </button>
               </div>
             )}
 
@@ -924,6 +949,40 @@ const Jobs = () => {
                  <h2 style={{ fontSize: '20px', fontWeight: '600', color: '#cc0000' }}>Already applied</h2>
                  <p style={{ fontSize: '14px', color: '#666', textAlign: 'center' }}>You’ve already applied to this job.</p>
                  <button onClick={() => setIsModalOpen(false)} style={{ backgroundColor: '#cc0000', color: '#fff', border: 'none', padding: '8px 24px', borderRadius: '24px', fontWeight: '600', marginTop: '8px', cursor: 'pointer' }}>Close Modal</button>
+              </div>
+            )}
+
+            {appState === 'error' && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', padding: '24px 0', gap: '16px' }}>
+                <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#cc0000', margin: 0 }}>Submission failed</h2>
+                <p style={{ fontSize: '14px', color: '#666', margin: 0 }}>{submitError}</p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    style={{ backgroundColor: 'transparent', color: '#666', border: 'none', fontWeight: '600', cursor: 'pointer' }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubmitError('');
+                      setAppState('idle');
+                    }}
+                    style={{
+                      backgroundColor: '#0A66C2',
+                      color: '#fff',
+                      padding: '10px 24px',
+                      borderRadius: '24px',
+                      border: 'none',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Try again
+                  </button>
+                </div>
               </div>
             )}
 

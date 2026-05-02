@@ -162,7 +162,9 @@ const Navbar = () => {
                       )}
                     </div>
                     <div style={{ minWidth: 0 }}>
-                    <p style={{ fontWeight: '600', fontSize: '14px', color: '#000000e6' }}>{userProfile?.displayName || (userRole === 'RECRUITER' ? 'Sneha' : 'Pratiksha Kaushik')}</p>
+                    <p style={{ fontWeight: '600', fontSize: '14px', color: '#000000e6' }}>
+                      {userProfile?.displayName?.trim() || (userRole === 'RECRUITER' ? 'Recruiter' : 'Member')}
+                    </p>
                     <p style={{ fontSize: '12px', color: '#666', wordBreak: 'break-all' }}>{userProfile?.email || userRole}</p>
                     </div>
                   </div>
