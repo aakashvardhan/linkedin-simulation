@@ -220,3 +220,101 @@ def test_approve_outreach_rejected_path_does_not_call_messaging(
     assert response.status_code == 200
     assert called["count"] == 0
     assert any(topic == "ai.results" for topic, _ in captured_events)
+
+# ---------------------------------------------------------------------------
+# Career Coach async + HITL
+# ---------------------------------------------------------------------------
+
+
+def test_career_coach_kickoff_requires_member_role(client, recruiter_headers, captured_events):
+    response = client.post(
+        "/ai/career-coach/kickoff",
+        json={"member_id": "m1", "target_job_id": "j1"},
+        headers=recruiter_headers,
+    )
+    assert response.status_code == 403
+
+
+def test_career_coach_kickoff_creates_task_and_publishes(
+    monkeypatch, client, member_headers, captured_events, fake_task_store
+):
+    from app.clients import job_client
+
+    async def fake_job(job_id: str):
+        return {"job_id": job_id, "title": "Engineer"}
+
+    monkeypatch.setattr(job_client, "fetch_job", fake_job)
+    from app.api import candidate_routes as cr
+    monkeypatch.setattr(cr.job_client, "fetch_job", fake_job)
+
+    response = client.post(
+        "/ai/career-coach/kickoff",
+        json={"member_id": "member-1", "target_job_id": "j1"},
+        headers=member_headers,
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"]
+    assert body["websocket_url"] == f"/ai/ws/{body['task_id']}"
+    assert body["task_id"] in fake_task_store.tasks
+    assert any(topic == "ai.requests" for topic, _ in captured_events)
+
+
+def test_career_coach_approve_rejects_wrong_member(
+    client, member_headers, fake_task_store
+):
+    from app.models.task import AgentTask, TaskStatus
+
+    task = AgentTask(
+        task_id="cc1",
+        trace_id="cc1",
+        member_id="other-member",
+        task_kind="member",
+        job_id="j1",
+        idempotency_key="cc1",
+        status=TaskStatus.AWAITING_APPROVAL,
+        result={"gap": {}, "suggestions": {}},
+    )
+    fake_task_store.tasks["cc1"] = task
+
+    response = client.post(
+        "/ai/career-coach/approve",
+        json={
+            "task_id": "cc1",
+            "member_id": "other-member",
+            "action": "rejected",
+        },
+        headers=member_headers,
+    )
+    assert response.status_code == 403
+
+
+def test_career_coach_approve_happy_path_reject(
+    client, member_headers, fake_task_store, captured_events
+):
+    from app.models.task import AgentTask, TaskStatus
+
+    task = AgentTask(
+        task_id="cc2",
+        trace_id="cc2",
+        member_id="member-1",
+        task_kind="member",
+        job_id="j1",
+        idempotency_key="cc2",
+        status=TaskStatus.AWAITING_APPROVAL,
+        result={"gap": {}, "suggestions": {}},
+    )
+    fake_task_store.tasks["cc2"] = task
+
+    response = client.post(
+        "/ai/career-coach/approve",
+        json={
+            "task_id": "cc2",
+            "member_id": "member-1",
+            "action": "rejected",
+        },
+        headers=member_headers,
+    )
+    assert response.status_code == 200
+    assert any(topic == "ai.results" for topic, _ in captured_events)
+
