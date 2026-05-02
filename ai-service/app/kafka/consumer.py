@@ -17,7 +17,7 @@ from typing import Any
 
 from aiokafka import AIOKafkaConsumer
 
-from app.agents import job_matcher, outreach_drafter
+from app.agents import career_coach, job_matcher, outreach_drafter
 from app.agents.supervisor import run_hiring_workflow
 from app.api.routes import _task_results
 from app.api.websocket import push_update
@@ -244,6 +244,131 @@ async def _run_candidate_workflow(event: dict[str, Any]) -> None:
     )
 
 
+
+async def _run_career_coach_workflow(event: dict[str, Any]) -> None:
+    """Member Career Coach: fetch job + profile, run LLM coach, then await HITL approval.
+
+    Triggered when `payload.career_coach` is true (see `/ai/career-coach/kickoff`).
+    """
+
+    payload = event.get("payload", {})
+    task_id = payload.get("task_id")
+    idempotency_key = event.get("idempotency_key") or task_id
+    if not task_id:
+        logger.warning("Career coach event missing task_id; skipping")
+        return
+
+    existing = await task_store.get_task_by_idempotency_key(idempotency_key)
+    if existing is not None and existing.status not in (TaskStatus.QUEUED, TaskStatus.PROCESSING):
+        logger.info(
+            "Skipping duplicate career coach task_id=%s status=%s",
+            task_id,
+            existing.status.value,
+        )
+        return
+
+    member_id = payload.get("member_id")
+    target_job_id = payload.get("target_job_id")
+    if not member_id or not target_job_id:
+        error = "payload missing member_id or target_job_id"
+        logger.warning("Career coach aborted task_id=%s: %s", task_id, error)
+        await task_store.mark_step_failed(
+            task_id,
+            StepResult(step=StepName.CAREER_COACH, status=StepStatus.RUNNING),
+            error=error,
+        )
+        await push_update(
+            task_id,
+            {"step": StepName.CAREER_COACH.value, "status": TaskStatus.FAILED.value, "progress": 0, "error": error},
+        )
+        return
+
+    await push_update(
+        task_id,
+        _progress_message(StepName.CAREER_COACH, StepStatus.RUNNING, 0),
+    )
+
+    try:
+        job = await job_client.fetch_job(target_job_id)
+        member = await profile_client.fetch_member(member_id)
+    except ServiceError as exc:
+        await task_store.mark_step_failed(
+            task_id,
+            StepResult(step=StepName.CAREER_COACH, status=StepStatus.RUNNING),
+            error=str(exc),
+        )
+        await push_update(
+            task_id,
+            _progress_message(
+                StepName.CAREER_COACH,
+                StepStatus.FAILED,
+                0,
+                {"error": str(exc)},
+            ),
+        )
+        return
+
+    try:
+        coach_result = await career_coach.coach(job, member)
+    except Exception as e:
+        logger.exception("Career coach LLM failed task_id=%s", task_id)
+        await task_store.mark_step_failed(
+            task_id,
+            StepResult(step=StepName.CAREER_COACH, status=StepStatus.RUNNING),
+            error=str(e),
+        )
+        await push_update(
+            task_id,
+            _progress_message(StepName.CAREER_COACH, StepStatus.FAILED, 0, {"error": str(e)}),
+        )
+        return
+
+    await task_store.append_step(
+        task_id,
+        StepResult(
+            step=StepName.CAREER_COACH,
+            status=StepStatus.COMPLETED,
+            data=coach_result,
+            finished_at=_now(),
+        ),
+    )
+    await push_update(
+        task_id,
+        _progress_message(StepName.CAREER_COACH, StepStatus.COMPLETED, 100),
+    )
+
+    result = {
+        "member_id": member_id,
+        "target_job_id": target_job_id,
+        "job_title": job.get("title"),
+        **coach_result,
+    }
+    await task_store.set_result(task_id, result, TaskStatus.AWAITING_APPROVAL)
+    _task_results[event.get("trace_id", task_id)] = result
+
+    await publish_event(
+        AI_RESULTS_TOPIC,
+        {
+            "event_type": AIEventType.AI_COMPLETED.value,
+            "trace_id": event.get("trace_id", task_id),
+            "actor_id": member_id,
+            "entity": {"entity_type": AIEntityType.AI_TASK.value, "entity_id": task_id},
+            "payload": result,
+            "idempotency_key": idempotency_key,
+        },
+    )
+    await push_update(
+        task_id,
+        {
+            "step": "done",
+            "status": TaskStatus.AWAITING_APPROVAL.value,
+            "progress": 100,
+            "requires_human_review": True,
+        },
+    )
+
+
+
 async def _run_legacy_recruiter_workflow(event: dict[str, Any]) -> None:
     """Partner's original flow, preserved verbatim for backwards compatibility."""
 
@@ -274,7 +399,10 @@ async def _handle_event(event: dict[str, Any]) -> None:
 
     payload = event.get("payload", {})
     if "task_id" in payload:
-        await _run_candidate_workflow(event)
+        if payload.get("career_coach"):
+            await _run_career_coach_workflow(event)
+        else:
+            await _run_candidate_workflow(event)
     elif "resume_text" in payload:
         await _run_legacy_recruiter_workflow(event)
     else:
