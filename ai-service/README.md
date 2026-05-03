@@ -70,14 +70,11 @@ ai-service/
 - OpenRouter API key — get one at [openrouter.ai](https://openrouter.ai)
 
 ### Environment variables
-Create a `.env` file in the `ai-service/` directory:
-```
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_MODEL=google/gemma-4-31b-it:free
-KAFKA_BOOTSTRAP=ai_kafka:9092
-MONGO_URI=mongodb://ai_mongo:27017
-REDIS_URL=redis://ai_redis:6379
-```
+Copy `.env.example` to `.env` and set `GROQ_API_KEY` (and any other overrides).
+
+**Docker Compose (`docker compose up`):** `docker-compose.yml` injects Kafka, MongoDB, and Redis URLs for inter-container DNS (`redis://redis:6379`, etc.). Your `.env` does not need those unless you remove the compose `environment` section.
+
+**Running uvicorn on the host:** use localhost endpoints only, for example `REDIS_URL=redis://localhost:6379` (with Redis listening on `6379`, e.g. `docker compose up -d redis` with the published port).
 
 ### Run locally
 ```bash

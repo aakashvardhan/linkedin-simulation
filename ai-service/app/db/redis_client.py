@@ -41,7 +41,12 @@ def _redis() -> Redis:
     """
 
     logger.debug("Creating Redis client for %s", _redacted_redis_url(settings.redis_url))
-    return Redis.from_url(settings.redis_url, decode_responses=True)
+    return Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=5.0,
+        socket_timeout=5.0,
+    )
 
 
 def get_redis() -> Redis:

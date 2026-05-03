@@ -19,8 +19,9 @@ from fastapi import FastAPI
 from app.api.candidate_routes import router as candidate_router
 from app.api.routes import router
 from app.api.websocket import ws_router
+from app.config import settings
 from app.db.mongo import close_client
-from app.db.redis_client import close_redis
+from app.db.redis_client import close_redis, get_redis
 from app.kafka.consumer import start_consumer
 from app.kafka.producer import stop_producer
 
@@ -51,6 +52,21 @@ app.include_router(ws_router)
 @app.on_event("startup")
 async def startup() -> None:
     logger.info("Starting AI Agent Service")
+    logger.info(
+        "LLM provider: base_url=%s model=%s api_key_configured=%s",
+        settings.groq_base_url,
+        settings.groq_model,
+        bool(settings.groq_api_key.get_secret_value()),
+    )
+    try:
+        await get_redis().ping()
+        logger.info("Redis ping succeeded")
+    except Exception:
+        logger.exception(
+            "Redis unreachable — set REDIS_URL for your runtime: "
+            "redis://localhost:6379 (uvicorn on the host, Redis published on 6379) or "
+            "redis://redis:6379 (ai-service container next to the redis service in Compose)"
+        )
     asyncio.create_task(_run_kafka_consumer())
 
 

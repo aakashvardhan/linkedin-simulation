@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 
 RUN groupadd --system app \
-    && useradd --system --ingroup app --home /app --shell /usr/sbin/nologin appuser \
+    && useradd --system -g app -d /app --shell /usr/sbin/nologin appuser \
     && chown -R appuser:app /app
 
 # Expose FastAPI port

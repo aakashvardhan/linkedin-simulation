@@ -60,8 +60,15 @@ services:
     container_name: ai_service
     ports:
       - "8000:8000"
+    # Allow the container to reach Job/Profile stubs started on the host
+    # (`python scripts/mock_downstream_services.py`). Linux: requires Compose v2+.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Optional: copy `.env.example` to `.env` for secrets (e.g. GROQ_API_KEY).
+    # Infrastructure URLs below override `.env` so in-network hostnames stay correct.
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       kafka:
         condition: service_healthy
@@ -71,8 +78,13 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP: ai_kafka:9092
-      MONGO_URI: mongodb://ai_mongo:27017
-      REDIS_URL: redis://ai_redis:6379
+      # Use Compose *service* names for DNS (not container_name).
+      MONGO_URI: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+      # Override `.env` loopback URLs: inside the container, 127.0.0.1 is this container,
+      # not your laptop. Point at stubs listening on the host (ports 8001/8002).
+      JOB_SERVICE_URL: http://host.docker.internal:8002
+      PROFILE_SERVICE_URL: http://host.docker.internal:8001
 
 volumes:
   mongo_data:

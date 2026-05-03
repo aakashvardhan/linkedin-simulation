@@ -1,5 +1,11 @@
+from pathlib import Path
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve `.env` next to the ai-service package root so settings load correctly
+# even when uvicorn/pytest cwd is the repo root or elsewhere.
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -28,7 +34,11 @@ class Settings(BaseSettings):
     # Timeout for outbound HTTP calls to other services (seconds).
     http_client_timeout: float = 5.0
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_SERVICE_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()

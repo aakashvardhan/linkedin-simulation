@@ -4,6 +4,7 @@ import hashlib
 import logging
 import uuid
 
+import redis.exceptions as redis_exc
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -120,6 +121,12 @@ async def get_status(trace_id: str) -> dict:
 async def get_result(trace_id: str) -> dict:
     try:
         result = await get_agent_result(trace_id)
+    except redis_exc.RedisError as exc:
+        logger.exception("Redis error loading agent result trace_id=%s", trace_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Redis unavailable; fix REDIS_URL and ensure Redis is running",
+        ) from exc
     except Exception as exc:
         logger.exception("Failed to load agent result trace_id=%s", trace_id)
         raise HTTPException(

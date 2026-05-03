@@ -51,7 +51,7 @@ async def parse_resume(resume_text: str) -> dict:
         )
     except Exception as exc:
         logger.error("client.chat.completions.create failed in parse_resume: %s", exc, exc_info=True)
-        raise RuntimeError("Resume parser LLM request failed") from exc
+        raise RuntimeError(f"Resume parser LLM request failed: {exc}") from exc
 
     choices = getattr(response, "choices", None) or []
     if not choices:
