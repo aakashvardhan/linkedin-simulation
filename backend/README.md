@@ -1,7 +1,5 @@
 # LinkedIn Simulation M3/M4 Backend
 
-**Integration for other teams & AWS (OpenAPI, auth, CORS, health checks):** see `docs/INTEGRATION.md` at the repository root.
-
 Updated FastAPI backend aligned to the **Group3 API document** for the M3/M4-owned scope and the shared **Database Schema Reference**.
 
 Included services:
@@ -137,22 +135,6 @@ Seeded values:
 - second member email: `leo.kim@example.com`
 - second member password: `Member123!`
 
-## Ingest bundled jobs + resume CSVs
-
-Repo CSVs (synthetic rows in LinkedIn/Kaggle-style columns) live under `../datasets/`. They load into **`job_postings`**, **`companies`**, **`recruiters`**, and **`members`** (+ **`member_skills`**).
-
-```bash
-# from backend/ — replace Kaggle exports by using the same paths and headers
-PYTHONPATH=. python3 scripts/ingest_demo_data.py
-
-# optional caps
-PYTHONPATH=. python3 scripts/ingest_demo_data.py --jobs 200 --members 50
-```
-
-Ingested members use email `resume.<ID>@ingest.local` and password **`Member123!`**. Ingested recruiters use **`Recruiter123!`** (`recruiter.<slug>.<company_id>@ingest.local`). Re-run skips duplicate jobs (same company + title) and duplicate member emails.
-
-For a **large** load (10K+, requires `pandas` + `faker`: `pip install pandas faker`), place real cleaned files at `datasets/jobs/clean_jobs.csv` and `datasets/resumes/Resume/Resume.csv`, then run `python scripts/seed_data.py`.
-
 ## First smoke test
 
 1. login as recruiter with `/recruiters/login`
@@ -161,18 +143,3 @@ For a **large** load (10K+, requires `pandas` + `faker`: `pip install pandas fak
 4. login as member with `/members/login`
 5. save a job with `/jobs/save`
 6. request a connection with `/connections/request`
-
-## Local frontend (repo `frontend/`)
-
-The React app talks to this API using `VITE_API_BASE_URL` (default **`http://127.0.0.1:8000`**).
-
-- Auth: `POST /members/login`, `POST /recruiters/login`, then **`GET /auth/me`** with the JWT.
-- Jobs after login: `POST /jobs/search` (members) or **`POST /jobs/byRecruiter`** (recruiters).
-- Copy **`frontend/.env.example`** → **`frontend/.env`** and set `VITE_BACKEND_INTEGRATION=true` so jobs hydrate from MySQL.
-
-Quick stack from repo root:
-
-```bash
-./scripts/local-full-stack.sh
-cd frontend && npm run dev
-```

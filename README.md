@@ -1,74 +1,158 @@
-# linkedInDS — full stack (FastAPI + React)
+# LinkedIn Simulation M3/M4 Backend
 
-Integrated SPA + core backend (MySQL). Anyone can run locally with Docker for databases + two terminals for API and UI.
+## 1. Project Scope
+This backend covers:
+- Profile Service
+- Job Service
+- Connection Service
 
-## Prerequisites
+## 2. Tech Stack
+- Python 3.11+
+- FastAPI
+- SQLAlchemy
+- MySQL
+- MongoDB
+- Docker
+- Uvicorn
 
-- **Python 3.11+** (backend)
-- **Node 18+** and npm (frontend)
-- **Docker Desktop** (recommended: MySQL, MongoDB, Redis, Kafka via `backend/docker-compose.yml`)
+## 3. Folder Placement
+Place this `README.md` in the project root, where these files/folders exist:
+- `app/`
+- `requirements.txt`
+- `schema.sql`
+- `.env`
 
-## Quick start
-
-### 1. Backend dependencies & env
+## 4. Create Virtual Environment
+Run these commands from the project root:
 
 ```bash
-cd backend
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env        # edit MYSQL_* and JWT_SECRET
-```
-
-Start infrastructure (from `backend/`):
-
-```bash
-docker compose up -d mysql mongo redis
-```
-
-Optional one-shot (builds API container too — see script):
-
-```bash
-chmod +x scripts/local-full-stack.sh
-./scripts/local-full-stack.sh   # from repo root
-```
-
-Run the API locally:
-
-```bash
-cd backend
 source .venv/bin/activate
-python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- Health: <http://127.0.0.1:8000/health>
-- OpenAPI: <http://127.0.0.1:8000/docs>
+## 5. Install Python Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-### 2. Frontend
+## 6. Create `.env` File
+Create a file named `.env` in the project root and paste this:
+
+```env
+APP_NAME=LinkedIn Simulation M3/M4 Backend
+APP_HOST=0.0.0.0
+APP_PORT=8000
+DEBUG=true
+AUTO_CREATE_SCHEMA=true
+
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DB=linkedin_simulation
+MYSQL_USER=root
+MYSQL_PASSWORD=YOUR_MYSQL_PASSWORD
+
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB=linkedin_simulation
+
+ENABLE_KAFKA=false
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+KAFKA_CLIENT_ID=linkedin-m3m4-backend
+KAFKA_CONSUMER_GROUP=linkedin-events-consumer
+```
+
+## 7. Start MySQL
+Open MySQL:
 
 ```bash
-cd frontend
-cp .env.example .env          # set VITE_API_BASE_URL=http://127.0.0.1:8000
-npm install
-npm run dev
+mysql -u root -p
 ```
 
-Open the printed URL (often <http://localhost:5173>). After changing `.env`, restart Vite.
+Create the database:
 
-### 3. First account
+```sql
+CREATE DATABASE IF NOT EXISTS linkedin_simulation;
+EXIT;
+```
 
-Use **Create account** in the app (persists to MySQL when `VITE_BACKEND_INTEGRATION=true`), or run optional seed scripts — see `backend/README.md`.
+Load the schema:
 
-## Configuration notes
+```bash
+mysql -u root -p linkedin_simulation < schema.sql
+```
 
-- **CORS:** With empty `CORS_ORIGINS`, local dev allows `localhost` / `127.0.0.1` on any port (Vite may use 5174+). For production, set `CORS_ORIGINS` on the backend.
-- **Integration contract:** `docs/INTEGRATION.md`
+## 8. Start MongoDB
+### Option A: Use existing Docker container
+If you already have a MongoDB container:
 
-## Repo layout
+```bash
+docker start mongo
+docker port mongo
+```
 
-| Path | Role |
-|------|------|
-| `backend/` | FastAPI, SQLAlchemy, JWT auth |
-| `frontend/` | Vite + React SPA |
-| `docs/` | Partner integration notes |
-| `scripts/` | Helper scripts (e.g. local stack) |
+Make sure the port mapping shows `27017`.
+
+### Option B: Run a new MongoDB container
+```bash
+docker run -d --name -mongo -p 27017:27017 mongo:7
+```
+
+## 9. Start the Backend
+Run this from the project root:
+
+```bash
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+## 10. Open Swagger UI
+Open this in your browser:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## 11. Recommended API Test Order
+Test in this order:
+1. `POST /members/create`
+2. `POST /members/login`
+3. `POST /recruiters/create`
+4. `POST /recruiters/login`
+5. `POST /jobs/create`
+6. `POST /jobs/search`
+7. `POST /jobs/save`
+8. `POST /connections/request`
+9. `POST /connections/pending`
+10. `POST /connections/accept`
+11. `POST /connections/list`
+
+## 12. Notes
+- Use the actual IDs returned by create APIs in later requests.
+- Keep `ENABLE_KAFKA=false` for initial API testing.
+- Change `YOUR_MYSQL_PASSWORD` in `.env` to your local MySQL password.
+- MongoDB is needed for event-related collections and startup index creation.
+- MySQL is used for members, recruiters, companies, job postings, connections, and saved jobs.
+
+## 13. Common Issues
+### MySQL connection error
+- Check MySQL is running.
+- Check `.env` values.
+- Make sure `linkedin_simulation` database exists.
+
+### MongoDB connection error
+- Start the MongoDB Docker container.
+- Confirm port `27017` is mapped.
+
+### Duplicate email error
+- Use a new email for `/members/create`.
+
+### API not opening
+- Make sure Uvicorn is running on port `8000`.
+- Open `http://127.0.0.1:8000/docs`
+
+## 14. Stop Services
+To stop the backend:
+- Press `CTRL + C`
+
+To stop MongoDB container:
+```bash
+docker stop mongo
+```
