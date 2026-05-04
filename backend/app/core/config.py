@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     kafka_client_id: str = Field(default='linkedin-m3m4-backend', alias='KAFKA_CLIENT_ID')
     kafka_consumer_group: str = Field(default='linkedin-events-consumer', alias='KAFKA_CONSUMER_GROUP')
 
+    enable_redis: bool = Field(default=True, alias='ENABLE_REDIS')
+    redis_url: str = Field(default='redis://localhost:6379', alias='REDIS_URL')
+
     jwt_secret: str = Field(default='change-me-in-env', alias='JWT_SECRET')
     jwt_algorithm: str = Field(default='HS256', alias='JWT_ALGORITHM')
     access_token_expire_minutes: int = Field(default=60, alias='ACCESS_TOKEN_EXPIRE_MINUTES')

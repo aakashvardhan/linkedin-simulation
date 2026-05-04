@@ -31,8 +31,7 @@ async def lifespan(_: FastAPI):
     mongo_ready = ensure_mongo_indexes()
     if not mongo_ready:
         print("[WARN] App started without MongoDB. M3/M4 MySQL APIs will still work.")
-        yield
-
+    yield
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 

@@ -11,7 +11,7 @@ from app.db.mongo import db, ensure_mongo_indexes
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('consumer')
 settings = get_settings()
-TOPICS = ['job.viewed', 'job.saved', 'connection.requested']
+TOPICS = ['job.viewed', 'job.saved', 'connection.requested', 'profile.viewed']
 
 
 def build_consumer() -> KafkaConsumer:
