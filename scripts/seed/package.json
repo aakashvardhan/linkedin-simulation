@@ -1,0 +1,15 @@
+{
+  "name": "linkedin-seed",
+  "version": "1.0.0",
+  "description": "Seed and verification scripts for M5/M6 analytics data",
+  "scripts": {
+    "seed":   "node seed_analytics.js",
+    "verify": "node verify_analytics.js"
+  },
+  "dependencies": {
+    "dotenv":   "^16.4.5",
+    "mongoose": "^8.4.0",
+    "mysql2":   "^3.9.7",
+    "uuid":     "^10.0.0"
+  }
+}

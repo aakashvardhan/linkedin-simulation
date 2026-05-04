@@ -1,0 +1,50 @@
+# application-service — M5
+# Owned by: Pair 3 (M5/M6)
+# Included by root docker-compose.yml via include:
+# Infra (mysql, mongo, kafka, redis) is defined in root; referenced as external here.
+
+services:
+  application-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: application-service
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # MySQL
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: linkedin_pass
+      DB_NAME: linkedin_simulation
+      # MongoDB
+      MONGO_URI: mongodb://mongo:27017/linkedin_simulation
+      # Kafka
+      KAFKA_BROKER: kafka:9092
+      KAFKA_CLIENT_ID: application-service
+      # Redis
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Service
+      PORT: "8004"
+      ENABLE_BENCHMARK_HELPERS: "1"
+    ports:
+      - "8004:8004"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

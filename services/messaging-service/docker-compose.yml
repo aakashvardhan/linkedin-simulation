@@ -1,0 +1,41 @@
+# messaging-service — M5
+# Owned by: Pair 3 (M5/M6)
+# Included by root docker-compose.yml via include:
+# Infra (mongo, kafka, redis) is defined in root; referenced as external here.
+
+services:
+  messaging-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: messaging-service
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # MongoDB
+      MONGO_URI: mongodb://mongo:27017/linkedin_simulation
+      # Kafka
+      KAFKA_BROKER: kafka:9092
+      KAFKA_CLIENT_ID: messaging-service
+      # Redis
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # Service
+      PORT: "8005"
+    ports:
+      - "8005:8005"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

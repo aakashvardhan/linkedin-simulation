@@ -1,2 +1,10 @@
 results/*.jtl
 node_modules
+.env
+.env.local
+
+# Local copies of all origin/* branches (regenerate anytime; large / duplicate)
+upstream-branches/
+
+# Python virtual env
+linkedin_env/
