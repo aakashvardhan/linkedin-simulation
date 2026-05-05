@@ -44,6 +44,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# JMeter generated outputs
+jmeter/results/
+jmeter/reports/
+jmeter.log
+
 # ── Editors & OS ──────────────────────────────────────────────────────────────
 .idea/
 *.suo
@@ -54,3 +59,8 @@ lerna-debug.log*
 .vscode/*
 !.vscode/extensions.json
 .DS_Store
+
+# JMeter generated outputs
+jmeter/results/
+jmeter/reports/
+jmeter.log
