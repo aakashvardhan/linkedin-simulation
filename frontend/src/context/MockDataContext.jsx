@@ -89,6 +89,11 @@ function mapBackendJobRow(raw, idx) {
     0;
   const hasApplied = !!(raw?.hasApplied ?? raw?.has_applied ?? raw?.applied);
 
+  const rawSkills = raw?.skills_required ?? raw?.skillsRequired ?? raw?.skills ?? [];
+  const skillsRequired = Array.isArray(rawSkills)
+    ? rawSkills
+    : (() => { try { return JSON.parse(rawSkills); } catch { return String(rawSkills).split(',').map(s => s.trim()).filter(Boolean); } })();
+
   return {
     id,
     title,
@@ -100,6 +105,7 @@ function mapBackendJobRow(raw, idx) {
     description,
     applicants,
     hasApplied,
+    skills_required: skillsRequired,
   };
 }
 
@@ -119,13 +125,31 @@ function formatAppliedAgo(iso) {
 
 function mapBackendApplicationRow(row) {
   const aid = row?.application_id ?? row?.id;
+  const firstName = row?.first_name || '';
+  const lastName = row?.last_name || '';
+  const name = row?.name || [firstName, lastName].filter(Boolean).join(' ') || 'Member';
+  const headline = row?.headline || '';
+
+  // Build a rich resume summary for the AI service from all available fields
+  const coverLetter = (row?.resume_summary || row?.cover_letter || '').trim();
+  let resumeSummary = coverLetter;
+  if (coverLetter.length < 200) {
+    const parts = [];
+    if (name && name !== 'Member') parts.push(`Name: ${name}`);
+    if (headline) parts.push(`Title: ${headline}`);
+    const skills = Array.isArray(row?.skills) ? row.skills : [];
+    if (skills.length) parts.push(`Skills: ${skills.join(', ')}`);
+    const profileText = parts.join('\n');
+    resumeSummary = profileText + (coverLetter ? `\n\n${coverLetter}` : '');
+  }
+
   return {
     id: aid,
     application_id: aid,
-    name: row?.name || 'Member',
+    name,
     email: row?.email || '',
-    headline: row?.headline || '',
-    resumeSummary: row?.resume_summary || '',
+    headline,
+    resumeSummary: resumeSummary.slice(0, 1200),
     status: row?.status || 'submitted',
     appliedAgo: formatAppliedAgo(row?.application_datetime),
   };
@@ -535,7 +559,8 @@ export const MockDataProvider = ({ children }) => {
           const jid = Number(j.id);
           if (Number.isNaN(jid)) return null;
           try {
-            const res = await api.applications.byJob({ job_id: jid, page: 1, page_size: 500 });
+            const rid = userProfile?.recruiter_id;
+            const res = await api.applications.byJob({ job_id: jid, recruiter_id: rid, page: 1, page_size: 500 });
             const apps = Array.isArray(res?.applications) ? res.applications : [];
             return [String(j.id), apps.map(mapBackendApplicationRow)];
           } catch {

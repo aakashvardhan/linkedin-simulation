@@ -7,19 +7,47 @@ import {
   recruiterProfilePhotoKey,
   PROFILE_PHOTO_UPDATED,
 } from '../context/MockDataContext';
+import { makeApi } from '../api';
 import './LeftSidebar.css';
 
 const LeftSidebar = () => {
-  const { userProfile, userRole } = useMockData();
+  const { userProfile, userRole, authToken } = useMockData();
   const profilePath = userRole === 'RECRUITER' ? '/recruiter/profile' : '/in/me';
   const location = useLocation();
   const [photoTick, setPhotoTick] = useState(0);
+  const [connectionsCount, setConnectionsCount] = useState(null);
+  const [profileViews, setProfileViews] = useState(null);
+
+  const api = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
 
   useEffect(() => {
     const fn = () => setPhotoTick((t) => t + 1);
     window.addEventListener(PROFILE_PHOTO_UPDATED, fn);
     return () => window.removeEventListener(PROFILE_PHOTO_UPDATED, fn);
   }, []);
+
+  useEffect(() => {
+    if (!userProfile || userRole === 'RECRUITER') return;
+    const memberId = userProfile.member_id ?? userProfile.id;
+    if (!memberId) return;
+
+    api.connections.list({ member_id: memberId, page: 1, page_size: 1 })
+      .then((res) => {
+        const count = res?.total_count ?? res?.data?.total_count;
+        if (count != null) setConnectionsCount(count);
+      })
+      .catch(() => {});
+
+    api.analytics.memberDashboard({ member_id: memberId })
+      .then((res) => {
+        const series = res?.profile_views_series ?? res?.data?.profile_views_series;
+        if (Array.isArray(series)) {
+          const total = series.reduce((acc, d) => acc + (d.views || 0), 0);
+          setProfileViews(total);
+        }
+      })
+      .catch(() => {});
+  }, [userProfile, userRole, api]);
 
   const displayName = userProfile?.displayName?.trim() || 'Your profile';
   const headline = userProfile?.headline?.trim() || 'Add a headline in your profile';
@@ -56,12 +84,16 @@ const LeftSidebar = () => {
         <div className="profile-stats">
           <div className="stat-item">
             <span className="stat-label">Connections</span>
-            <span className="stat-value">500+</span>
+            <span className="stat-value">
+              {connectionsCount == null ? '—' : connectionsCount >= 500 ? '500+' : connectionsCount}
+            </span>
           </div>
-          <div className="stat-item">
-            <span className="stat-label">Who viewed your profile</span>
-            <span className="stat-value">124</span>
-          </div>
+          {userRole !== 'RECRUITER' && (
+            <div className="stat-item">
+              <span className="stat-label">Who viewed your profile</span>
+              <span className="stat-value">{profileViews == null ? '—' : profileViews}</span>
+            </div>
+          )}
         </div>
         <div style={{ padding: '12px', borderBottom: '1px solid #e0e0df', textAlign: 'left', cursor: 'pointer' }}>
           <p style={{ fontSize: '12px', color: '#666' }}>Unlock your full potential with Premium</p>

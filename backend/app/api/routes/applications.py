@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, get_db
 from app.core.kafka import publisher
@@ -10,7 +10,7 @@ from app.core.redis import cache_delete, cache_delete_pattern
 from app.core.responses import success_response
 from app.models.application import Application
 from app.models.job import JobPosting
-from app.models.member import Member
+from app.models.member import Member, MemberSkill, MemberExperience
 from app.schemas.application import (
     ApplicationAddNoteRequest,
     ApplicationGetRequest,
@@ -25,10 +25,48 @@ router = APIRouter()
 _ALLOWED_STATUS = {'submitted', 'reviewing', 'interview', 'offer', 'rejected'}
 
 
+def _build_resume_summary(app: Application, member: Member | None) -> str:
+    """Build a rich resume text for the AI service from available member data."""
+    # If application has cover letter / resume text, use that first
+    cover = (app.cover_letter or '').strip()
+    if len(cover) >= 200:
+        return cover[:1200]
+
+    if not member:
+        return cover
+
+    parts = []
+    name = f'{member.first_name} {member.last_name}'.strip()
+    if name:
+        parts.append(f'Name: {name}')
+    if member.headline:
+        parts.append(f'Title: {member.headline}')
+    if member.about:
+        parts.append(f'Summary: {member.about[:300]}')
+
+    skills = [s.skill_name for s in (member.skills or [])]
+    if skills:
+        parts.append(f'Skills: {", ".join(skills)}')
+
+    exps = member.experiences or []
+    if exps:
+        exp_lines = []
+        for e in exps[:4]:
+            dur = f'{e.start_date.year}–{e.end_date.year if e.end_date else "present"}'
+            exp_lines.append(f'{e.title} at {e.company} ({dur})')
+        parts.append('Experience: ' + '; '.join(exp_lines))
+
+    base = '\n'.join(parts)
+    # Append short cover letter at the end if present
+    if cover:
+        base = f'{base}\n\nCover letter: {cover[:400]}'
+    return base[:1200]
+
+
 def _application_row(app: Application, member: Member | None) -> dict:
     m = member
     name = f'{m.first_name} {m.last_name}'.strip() if m else 'Member'
-    summary = (app.cover_letter or '')[:1200] or ''
+    summary = _build_resume_summary(app, m)
     return {
         'application_id': app.application_id,
         'job_id': app.job_id,
@@ -150,11 +188,16 @@ def applications_by_job(
     page_size = max(payload.page_size, 1)
     rows = q.order_by(Application.application_datetime.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
-    out = []
-    for app in rows:
-        member = db.query(Member).filter(Member.member_id == app.member_id).first()
-        out.append(_application_row(app, member))
+    member_ids = [app.member_id for app in rows]
+    members = {
+        m.member_id: m
+        for m in db.query(Member)
+        .options(joinedload(Member.skills), joinedload(Member.experiences))
+        .filter(Member.member_id.in_(member_ids))
+        .all()
+    }
 
+    out = [_application_row(app, members.get(app.member_id)) for app in rows]
     return success_response(
         {'applications': out, 'total_count': total, 'page': page, 'page_size': page_size}
     )

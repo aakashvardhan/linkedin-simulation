@@ -26,6 +26,7 @@ import {
   memberProfilePhotoKey,
   notifyProfilePhotoUpdated,
 } from '../context/MockDataContext';
+import { makeApi } from '../api';
 import CareerCoachPanel from '../components/CareerCoachPanel';
 
 const EXTRA_SECTIONS_STORAGE = (email) => `linkdln:memberExtraSections:${email || 'me'}`;
@@ -89,6 +90,9 @@ const Profile = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [viewData, setViewData] = useState([]);
   const [appStatusData, setAppStatusData] = useState([]);
+  const [connectionsCount, setConnectionsCount] = useState(null);
+
+  const api = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
 
   // Expanded Profile State matching exactly 4.1 Schema attributes
   const [profile, setProfile] = useState({
@@ -360,6 +364,17 @@ const Profile = () => {
     `https://ui-avatars.com/api/?name=${encodeURIComponent(memberDisplayName)}&background=0A66C2&color=fff&size=152`;
 
   useEffect(() => {
+    const memberId = userProfile?.member_id ?? userProfile?.id;
+    if (!memberId) return;
+    api.connections.list({ member_id: memberId, page: 1, page_size: 1 })
+      .then((res) => {
+        const count = res?.total_count ?? res?.data?.total_count;
+        if (count != null) setConnectionsCount(count);
+      })
+      .catch(() => {});
+  }, [userProfile, api]);
+
+  useEffect(() => {
     let cancelled = false;
     setAnalyticsLoading(true);
     getMemberAnalytics({ window: '30d' })
@@ -480,7 +495,9 @@ const Profile = () => {
                <p style={{ fontSize: '14px', color: '#666', display: 'flex', alignItems: 'center', gap: '4px' }}><FaPhone /> {profile.phone}</p>
             </div>
             
-            <p style={{ fontSize: '14px', color: '#0A66C2', fontWeight: '600', marginTop: '8px', cursor: 'pointer' }}>500+ connections</p>
+            <p style={{ fontSize: '14px', color: '#0A66C2', fontWeight: '600', marginTop: '8px', cursor: 'pointer' }}>
+              {connectionsCount == null ? '—' : connectionsCount >= 500 ? '500+' : connectionsCount} connections
+            </p>
             
             <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
               <button type="button" style={{ backgroundColor: '#0A66C2', color: '#fff', borderRadius: '24px', padding: '6px 16px', fontWeight: '600', border: 'none', cursor: 'pointer' }}>Open to</button>

@@ -7,12 +7,65 @@ import {
   generateCandidateMatches,
 } from '../data/mockApplicants';
 import { mapAgentResultToCopilotCandidates, pollRecruiterResult } from '../utils/recruiterAssistant';
-import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope } from 'react-icons/fa';
+import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope, FaListUl } from 'react-icons/fa';
 
 const RECRUITER_ASSISTANT_OFFLINE = import.meta.env.VITE_RECRUITER_ASSISTANT_OFFLINE === 'true';
 
 /** Max applicants sent to the recruiter-assistant agent in one request (LLM cost / latency). */
 const MAX_AGENT_APPLICANT_BATCH = 50;
+
+const STEP_LABELS = {
+  resume_parsed: 'Parse Resume',
+  match_scored: 'Score Match',
+  ranking_explained: 'Explain Ranking',
+  interview_questions_generated: 'Generate Questions',
+  outreach_drafted: 'Draft Outreach',
+  candidates_ranked: 'Rank Candidates',
+};
+
+function AgentTracePanel({ steps, isLive = false }) {
+  const byStep = {};
+  steps.forEach((s) => {
+    const key = s.step;
+    if (!byStep[key]) byStep[key] = [];
+    byStep[key].push(s);
+  });
+
+  const stepOrder = Object.keys(STEP_LABELS);
+  const seen = new Set(steps.map((s) => s.step));
+  const allSteps = [...stepOrder, ...Object.keys(byStep).filter((k) => !stepOrder.includes(k))];
+
+  return (
+    <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', backgroundColor: '#fff' }}>
+      {allSteps.filter((k) => seen.has(k) || isLive).map((key) => {
+        const rows = byStep[key] || [];
+        const completed = rows.filter((r) => r.status === 'completed').length;
+        const failed = rows.filter((r) => r.status === 'failed').length;
+        const total = rows.length;
+        const inPipeline = stepOrder.includes(key);
+        const pending = isLive && total === 0 && inPipeline;
+
+        let icon, color;
+        if (pending) { icon = '○'; color = '#aaa'; }
+        else if (failed > 0 && completed === 0) { icon = '✗'; color = '#cc0000'; }
+        else if (failed > 0) { icon = '⚠'; color = '#c37d16'; }
+        else if (total > 0) { icon = '✓'; color = '#057642'; }
+        else { icon = '○'; color = '#aaa'; }
+
+        const label = STEP_LABELS[key] || key;
+        const detail = pending ? 'pending' : total === 0 ? '' : `${completed}/${total} ok${failed > 0 ? `, ${failed} failed` : ''}`;
+
+        return (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ color, fontWeight: '700', width: '14px', textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+            <span style={{ color: '#333', fontWeight: '500', minWidth: '160px' }}>{label}</span>
+            <span style={{ color: '#888', fontFamily: 'monospace' }}>{detail}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * Applicants stored from Application Service, or synthetic rows when the API returned none but the job
@@ -55,6 +108,8 @@ const RecruiterJobs = () => {
   const [applicantSearch, setApplicantSearch] = useState('');
   const [resumeViewerApplicant, setResumeViewerApplicant] = useState(null);
   const [copilotError, setCopilotError] = useState('');
+  const [agentTrace, setAgentTrace] = useState([]);
+  const [traceExpanded, setTraceExpanded] = useState(false);
 
   const applicantsForModal = useMemo(() => {
     if (!applicantsModalJob) return [];
@@ -137,6 +192,8 @@ const RecruiterJobs = () => {
     setExpandedCandidateId(null);
     setEditedEmails({});
     setCopilotError('');
+    setAgentTrace([]);
+    setTraceExpanded(false);
 
     const pool = getEffectiveApplicants(job, applicantsByJobId);
     const fromApi = (applicantsByJobId[String(job.id)] ?? []).length;
@@ -179,7 +236,7 @@ const RecruiterJobs = () => {
         remote: !!job.remote,
         industry: job.industry || '',
         type: job.type || '',
-        skills_required: [],
+        skills_required: Array.isArray(job.skills_required) ? job.skills_required : [],
       };
       const candidates = applicants.map((a) => ({
         candidate_id: String(a.id),
@@ -202,9 +259,14 @@ const RecruiterJobs = () => {
       const result = await pollRecruiterResult(
         (id) => recruiterApi.recruiterAssistant.result(id),
         traceId,
-        { maxWaitMs: 300000, intervalMs: 2000 },
+        {
+          maxWaitMs: 300000,
+          intervalMs: 2000,
+          onProgress: (steps) => setAgentTrace(steps),
+        },
       );
 
+      if (Array.isArray(result?.steps)) setAgentTrace(result.steps);
       const byId = new Map(pool.map((a) => [String(a.id), a]));
       let mapped = mapAgentResultToCopilotCandidates(result, byId);
 
@@ -237,6 +299,8 @@ const RecruiterJobs = () => {
   const resetCopilot = () => {
     setCopilotState('idle');
     setCopilotLog([]);
+    setAgentTrace([]);
+    setTraceExpanded(false);
     setSelectedJobForMatching(null);
     setMatchedCandidates([]);
     setExpandedCandidateId(null);
@@ -472,18 +536,21 @@ const RecruiterJobs = () => {
 
             {['parsing', 'matching', 'generating'].includes(copilotState) && (
               <div style={{ backgroundColor: '#f3f2ef', padding: '16px', borderRadius: '8px', border: '1px solid #e0e0df' }}>
-                 <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px' }}>Progress</h3>
-                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', fontFamily: 'monospace', color: '#000', maxHeight: '150px', overflowY: 'auto' }}>
-                    {copilotLog.map((log, i) => (
-                      <span key={i} style={{ color: log.includes('✓') ? '#004182' : '#666' }}>{log}</span>
-                    ))}
-                 </div>
-                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', color: '#0A66C2', fontSize: '14px', fontWeight: '600' }}>
-                    <FaSpinner className="spin-animation" />
-                    {copilotState === 'parsing' && 'Analyzing…'}
-                    {copilotState === 'matching' && 'Matching…'}
-                    {copilotState === 'generating' && 'Drafting…'}
-                 </div>
+                <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px' }}>Progress</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', fontFamily: 'monospace', color: '#000', maxHeight: '80px', overflowY: 'auto', marginBottom: '12px' }}>
+                  {copilotLog.map((log, i) => (
+                    <span key={i} style={{ color: log.includes('✓') ? '#004182' : '#666' }}>{log}</span>
+                  ))}
+                </div>
+                {agentTrace.length > 0 && (
+                  <AgentTracePanel steps={agentTrace} isLive />
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', color: '#0A66C2', fontSize: '14px', fontWeight: '600' }}>
+                  <FaSpinner className="spin-animation" />
+                  {copilotState === 'parsing' && 'Analyzing…'}
+                  {copilotState === 'matching' && 'Matching…'}
+                  {copilotState === 'generating' && 'Drafting…'}
+                </div>
               </div>
             )}
 
@@ -523,6 +590,19 @@ const RecruiterJobs = () => {
                     New Search
                   </button>
                 </div>
+                {agentTrace.length > 0 && (
+                  <div style={{ border: '1px solid #e0e0df', borderRadius: '8px', overflow: 'hidden' }}>
+                    <button
+                      onClick={() => setTraceExpanded((v) => !v)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '10px 12px', background: '#f3f2ef', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: '600', color: '#444' }}
+                    >
+                      <FaListUl size={11} />
+                      Agent Trace ({agentTrace.length} steps)
+                      {traceExpanded ? <FaChevronUp size={10} style={{ marginLeft: 'auto' }} /> : <FaChevronDown size={10} style={{ marginLeft: 'auto' }} />}
+                    </button>
+                    {traceExpanded && <AgentTracePanel steps={agentTrace} />}
+                  </div>
+                )}
 
                 {matchedCandidates.map((c) => {
                   const isExpanded = expandedCandidateId === c.candidateId;

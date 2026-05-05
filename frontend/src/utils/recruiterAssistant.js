@@ -110,15 +110,20 @@ export function mapAgentResultToCopilotCandidates(resultPayload, applicantsById)
 
 /**
  * Polls until trace completes processing or times out.
+ * options.onProgress(steps, traceStatus) is called on each poll with the latest steps array.
  */
 export async function pollRecruiterResult(getResult, traceId, options = {}) {
   const maxWaitMs = options.maxWaitMs ?? 300000;
   const intervalMs = options.intervalMs ?? 2000;
+  const onProgress = options.onProgress ?? null;
   const started = Date.now();
 
   while (Date.now() - started < maxWaitMs) {
     const data = await getResult(traceId);
     const status = data?.trace?.status;
+    if (onProgress && Array.isArray(data?.steps)) {
+      onProgress(data.steps, status);
+    }
     if (
       status === 'awaiting_approval' ||
       status === 'failed' ||
