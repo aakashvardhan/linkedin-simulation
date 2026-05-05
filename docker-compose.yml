@@ -193,7 +193,7 @@ services:
     networks:
       - linkedin-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 5s
       retries: 8
@@ -319,8 +319,6 @@ services:
       messaging-service:
         condition: service_healthy
       analytics-service:
-        condition: service_healthy
-      ai-service:
         condition: service_healthy
     ports:
       - "8090:8080"
