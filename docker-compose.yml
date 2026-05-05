@@ -2,10 +2,10 @@
 # Root docker-compose — LinkedIn Simulation full stack
 #
 # Service ownership:
-#   Pair 1 (M1/M2) — client (frontend)
+#   Pair 1 (M1/M2) — client (Vite app in ./frontend)
 #   Pair 2 (M3/M4) — api-backend (FastAPI), profile/job/connection (node-ms profile)
 #   Pair 3 (M5/M6) — application-service, messaging-service, analytics-service
-#   Pair 4 (M7/M8) — ai-service
+#   Pair 4 (M7/M8) — recruiter-assistant (agentic AI)
 #
 # Each Pair 3 service has its own docker-compose in services/<name>/docker-compose.yml
 # Pull them all in here via include: so `docker compose up` works from root.
@@ -44,13 +44,19 @@ x-kafka-env: &kafka-env
 x-redis-env: &redis-env
   REDIS_URL: redis://redis:6379
 
+# Recruiter Assistant (LLM keys from host env or `.env` next to this file)
+x-recruiter-llm: &recruiter-llm
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-google/gemma-2-9b-it:free}
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+
 services:
 
   # ── Infrastructure ───────────────────────────────────────────────────────────
 
   mysql:
     image: mysql:8.0
-    container_name: mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: linkedin_pass
@@ -72,7 +78,6 @@ services:
 
   mongo:
     image: mongo:7.0
-    container_name: mongo
     restart: unless-stopped
     ports:
       - "27017:27017"
@@ -89,7 +94,6 @@ services:
 
   redis:
     image: redis:7.2-alpine
-    container_name: redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -107,7 +111,6 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
-    container_name: zookeeper
     restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -127,13 +130,15 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.6.0
-    container_name: kafka
     restart: unless-stopped
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Bind both listeners explicitly — without this, cp-kafka may not listen on 9092 as expected (health checks fail).
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -147,12 +152,13 @@ services:
       - kafka-data:/var/lib/kafka/data
     networks:
       - linkedin-net
+    # Wait for broker to accept connections on PLAINTEXT (9092). `kafka-topics --list` exits 0 when ready.
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:9092"]
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "127.0.0.1:9092", "--list"]
       interval: 15s
-      timeout: 10s
-      retries: 15
-      start_period: 60s
+      timeout: 20s
+      retries: 25
+      start_period: 180s
 
   # ── Pair 2: Core Backend (M3/M4) ─────────────────────────────────────────────
 
@@ -278,31 +284,159 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Pair 4: AI Service (M7/M8) ───────────────────────────────────────────────
+  # ── Pair 4: Recruiter Assistant (agentic AI, M7/M8) ──────────────────────────
+  # Orchestrator + skill microservices (same image, different command).
 
-  ai-service:
+  ra-resume-parser:
     build:
-      context: ./services/ai-service
+      context: ./services/recruiter-assistant
       dockerfile: Dockerfile
-    container_name: ai-service
+    container_name: ra-resume-parser
+    restart: unless-stopped
+    command: ["uvicorn", "app.skill_services.resume_parser_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *recruiter-llm
+    networks:
+      - linkedin-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  ra-matcher:
+    build:
+      context: ./services/recruiter-assistant
+      dockerfile: Dockerfile
+    container_name: ra-matcher
+    restart: unless-stopped
+    command: ["uvicorn", "app.skill_services.matcher_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *recruiter-llm
+    networks:
+      - linkedin-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 120s
+
+  ra-ranking-explainer:
+    build:
+      context: ./services/recruiter-assistant
+      dockerfile: Dockerfile
+    container_name: ra-ranking-explainer
+    restart: unless-stopped
+    command: ["uvicorn", "app.skill_services.ranking_explainer_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *recruiter-llm
+    networks:
+      - linkedin-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  ra-interview-questions:
+    build:
+      context: ./services/recruiter-assistant
+      dockerfile: Dockerfile
+    container_name: ra-interview-questions
+    restart: unless-stopped
+    command: ["uvicorn", "app.skill_services.interview_questions_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *recruiter-llm
+    networks:
+      - linkedin-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  ra-outreach-drafter:
+    build:
+      context: ./services/recruiter-assistant
+      dockerfile: Dockerfile
+    container_name: ra-outreach-drafter
+    restart: unless-stopped
+    command: ["uvicorn", "app.skill_services.outreach_drafter_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *recruiter-llm
+    networks:
+      - linkedin-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  recruiter-assistant:
+    build:
+      context: ./services/recruiter-assistant
+      dockerfile: Dockerfile
+    container_name: recruiter-assistant
     restart: unless-stopped
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      ra-resume-parser:
+        condition: service_healthy
+      ra-matcher:
+        condition: service_healthy
+      ra-ranking-explainer:
+        condition: service_healthy
+      ra-interview-questions:
+        condition: service_healthy
+      ra-outreach-drafter:
+        condition: service_healthy
     environment:
-      <<: [*mongo-env, *kafka-env]
-      PORT: "8007"
-      KAFKA_CLIENT_ID: ai-service
+      <<: *recruiter-llm
+      KAFKA_BOOTSTRAP: kafka:9092
+      MONGO_URI: mongodb://mongo:27017
+      REDIS_URL: redis://redis:6379
+      RESUME_PARSER_URL: http://ra-resume-parser:8000
+      MATCHER_URL: http://ra-matcher:8000
+      RANKING_EXPLAINER_URL: http://ra-ranking-explainer:8000
+      INTERVIEW_QUESTIONS_URL: http://ra-interview-questions:8000
+      OUTREACH_DRAFTER_URL: http://ra-outreach-drafter:8000
     ports:
-      - "8007:8007"
+      - "8007:8000"
     networks:
       - linkedin-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 8
+      start_period: 45s
 
   # ── API Gateway + Frontend ───────────────────────────────────────────────────
 
@@ -320,6 +454,8 @@ services:
         condition: service_healthy
       analytics-service:
         condition: service_healthy
+      recruiter-assistant:
+        condition: service_healthy
     ports:
       - "8090:8080"
     volumes:
@@ -335,7 +471,7 @@ services:
 
   client:
     build:
-      context: ./client
+      context: ./frontend
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api

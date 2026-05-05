@@ -1,10 +1,34 @@
 import React, { useMemo, useState } from 'react';
 import { useMockData } from '../context/MockDataContext';
-import { APPLICATION_STATUSES, generateCandidateMatches } from '../data/mockApplicants';
+import { makeApi } from '../api';
+import {
+  APPLICATION_STATUSES,
+  generateApplicantsForJob,
+  generateCandidateMatches,
+} from '../data/mockApplicants';
+import { mapAgentResultToCopilotCandidates, pollRecruiterResult } from '../utils/recruiterAssistant';
 import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope } from 'react-icons/fa';
 
+const RECRUITER_ASSISTANT_OFFLINE = import.meta.env.VITE_RECRUITER_ASSISTANT_OFFLINE === 'true';
+
+/** Max applicants sent to the recruiter-assistant agent in one request (LLM cost / latency). */
+const MAX_AGENT_APPLICANT_BATCH = 50;
+
+/**
+ * Applicants stored from Application Service, or synthetic rows when the API returned none but the job
+ * still shows an applicant count (common with backend integration + seeded job metadata).
+ */
+function getEffectiveApplicants(job, applicantsByJobId) {
+  const fromStore = applicantsByJobId[String(job.id)] ?? [];
+  if (fromStore.length > 0) return fromStore;
+  const n = Number(job.applicants) || 0;
+  if (n > 0) return generateApplicantsForJob(job.id, Math.min(n, 500));
+  return [];
+}
+
 const RecruiterJobs = () => {
-  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus, userProfile } = useMockData();
+  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus, userProfile, authToken } = useMockData();
+  const recruiterApi = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
   const [newJob, setNewJob] = useState({
     title: '',
     company: 'My Startup',
@@ -30,10 +54,11 @@ const RecruiterJobs = () => {
   const [applicantsModalJob, setApplicantsModalJob] = useState(null);
   const [applicantSearch, setApplicantSearch] = useState('');
   const [resumeViewerApplicant, setResumeViewerApplicant] = useState(null);
+  const [copilotError, setCopilotError] = useState('');
 
   const applicantsForModal = useMemo(() => {
     if (!applicantsModalJob) return [];
-    const list = applicantsByJobId[String(applicantsModalJob.id)] ?? [];
+    const list = getEffectiveApplicants(applicantsModalJob, applicantsByJobId);
     const q = applicantSearch.trim().toLowerCase();
     if (!q) return list;
     return list.filter(
@@ -94,19 +119,119 @@ const RecruiterJobs = () => {
     });
   }, [jobs, search, industryFilter]);
 
-  /** Rank current applicants locally (replace with real AI service when available). */
-  const triggerCandidateMatching = (job) => {
-    setSelectedJobForMatching(job);
-    setMatchedCandidates([]);
-    setExpandedCandidateId(null);
-    setEditedEmails({});
-    const applicants = applicantsByJobId[String(job.id)] ?? [];
+  const runOfflineCandidateMatching = (job) => {
+    setCopilotError('');
+    const applicants = getEffectiveApplicants(job, applicantsByJobId);
     setCopilotState('matching');
-    setCopilotLog([`Ranking ${applicants.length} applicant(s) for “${job.title}”…`]);
+    setCopilotLog([`Offline ranking: ${applicants.length} applicant(s) for “${job.title}”…`]);
     const result = generateCandidateMatches(job, applicants, userProfile?.displayName || 'Recruiter');
     setMatchedCandidates(result.candidates);
     setCopilotLog((prev) => [...prev, `Done — ${result.candidates.length} candidate(s) ranked.`]);
     setCopilotState('results');
+  };
+
+  /** Rank applicants via `services/recruiter-assistant` (or offline mock when `VITE_RECRUITER_ASSISTANT_OFFLINE=true`). */
+  const triggerCandidateMatching = async (job) => {
+    setSelectedJobForMatching(job);
+    setMatchedCandidates([]);
+    setExpandedCandidateId(null);
+    setEditedEmails({});
+    setCopilotError('');
+
+    const pool = getEffectiveApplicants(job, applicantsByJobId);
+    const fromApi = (applicantsByJobId[String(job.id)] ?? []).length;
+    const applicants = pool.slice(0, MAX_AGENT_APPLICANT_BATCH);
+
+    if (RECRUITER_ASSISTANT_OFFLINE) {
+      runOfflineCandidateMatching(job);
+      return;
+    }
+
+    if (pool.length === 0) {
+      window.alert(
+        'There are no applicants for this job yet. When members apply from the Jobs page, they appear here for matching.',
+      );
+      setCopilotState('idle');
+      return;
+    }
+
+    setCopilotState('matching');
+    const originNote =
+      fromApi === 0 && pool.length > 0
+        ? ' (demo résumés generated from job applicant count — Application Service returned no rows)'
+        : '';
+    const batchNote =
+      pool.length > applicants.length
+        ? ` — sending top ${applicants.length} of ${pool.length} for scoring`
+        : '';
+    setCopilotLog([
+      `Contacting recruiter assistant for “${job.title}” (${pool.length} applicant(s))${originNote}${batchNote}…`,
+    ]);
+
+    try {
+      const actorId = String(userProfile?.recruiter_id ?? userProfile?.id ?? 'recruiter');
+      const jobPayload = {
+        id: job.id,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        description: job.description || '',
+        remote: !!job.remote,
+        industry: job.industry || '',
+        type: job.type || '',
+        skills_required: [],
+      };
+      const candidates = applicants.map((a) => ({
+        candidate_id: String(a.id),
+        resume_text:
+          (a.resumeSummary || '').trim() ||
+          `${a.name}. ${a.headline || ''}. ${a.email || ''}`,
+      }));
+
+      const queued = await recruiterApi.recruiterAssistant.request({
+        actor_id: actorId,
+        job: jobPayload,
+        candidates,
+      });
+      const traceId = queued?.trace_id;
+      if (!traceId) {
+        throw new Error('Recruiter assistant did not return a trace_id.');
+      }
+      setCopilotLog((prev) => [...prev, `Task queued (${String(traceId).slice(0, 8)}…). Scoring resumes…`]);
+
+      const result = await pollRecruiterResult(
+        (id) => recruiterApi.recruiterAssistant.result(id),
+        traceId,
+        { maxWaitMs: 300000, intervalMs: 2000 },
+      );
+
+      const byId = new Map(pool.map((a) => [String(a.id), a]));
+      let mapped = mapAgentResultToCopilotCandidates(result, byId);
+
+      if (mapped.length === 0 && pool.length > 0) {
+        const offline = generateCandidateMatches(
+          job,
+          pool.slice(0, Math.min(pool.length, MAX_AGENT_APPLICANT_BATCH)),
+          userProfile?.displayName || 'Recruiter',
+        );
+        mapped = offline.candidates;
+        setCopilotLog((prev) => [
+          ...prev,
+          'Assistant returned no ranked candidates (missing LLM keys or all pipeline steps failed). Showing offline demo ranking — configure OPENROUTER_API_KEY or GROQ_API_KEY on recruiter-assistant containers for live AI.',
+          `Done — ${mapped.length} candidate(s) (offline demo).`,
+        ]);
+      } else {
+        setCopilotLog((prev) => [...prev, `Done — ${mapped.length} candidate(s) ranked.`]);
+      }
+
+      setMatchedCandidates(mapped);
+      setCopilotState('results');
+    } catch (err) {
+      const msg = err?.message || String(err);
+      setCopilotError(msg);
+      setCopilotLog((prev) => [...prev, `Error: ${msg}`]);
+      setCopilotState('idle');
+    }
   };
 
   const resetCopilot = () => {
@@ -116,6 +241,7 @@ const RecruiterJobs = () => {
     setMatchedCandidates([]);
     setExpandedCandidateId(null);
     setEditedEmails({});
+    setCopilotError('');
   };
 
   const STATUS_COLORS = { verified: '#004182', needs_review: '#c37d16', flagged: '#cc0000' };
@@ -287,6 +413,60 @@ const RecruiterJobs = () => {
                 <p style={{ fontSize: '14px', lineHeight: '1.5' }}>
                   Click <strong>&ldquo;Find Candidates&rdquo;</strong> on any job posting to discover top-matched candidates with personalized outreach drafts.
                 </p>
+                {copilotError ? (
+                  <div
+                    style={{
+                      marginTop: '16px',
+                      textAlign: 'left',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      background: '#fff4f4',
+                      border: '1px solid #f5c6cb',
+                      color: '#721c24',
+                      fontSize: '13px',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <strong>Assistant unavailable.</strong> {copilotError}
+                    <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCopilotError('');
+                          if (selectedJobForMatching) runOfflineCandidateMatching(selectedJobForMatching);
+                        }}
+                        disabled={!selectedJobForMatching}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '16px',
+                          border: '1px solid #004182',
+                          background: '#fff',
+                          color: '#004182',
+                          fontWeight: 600,
+                          cursor: selectedJobForMatching ? 'pointer' : 'not-allowed',
+                          fontSize: '12px',
+                        }}
+                      >
+                        Use offline demo ranking
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCopilotError('')}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '16px',
+                          border: '1px solid #ccc',
+                          background: '#fff',
+                          color: '#666',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -304,6 +484,29 @@ const RecruiterJobs = () => {
                     {copilotState === 'matching' && 'Matching…'}
                     {copilotState === 'generating' && 'Drafting…'}
                  </div>
+              </div>
+            )}
+
+            {copilotState === 'results' && matchedCandidates.length === 0 && (
+              <div style={{ padding: '12px', fontSize: '13px', color: '#666', textAlign: 'center' }}>
+                No ranked candidates to display. Try{' '}
+                <button
+                  type="button"
+                  onClick={() => selectedJobForMatching && runOfflineCandidateMatching(selectedJobForMatching)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#0A66C2',
+                    fontWeight: 600,
+                    cursor: selectedJobForMatching ? 'pointer' : 'default',
+                    textDecoration: 'underline',
+                    padding: 0,
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  offline demo ranking
+                </button>{' '}
+                or check recruiter-assistant logs.
               </div>
             )}
 

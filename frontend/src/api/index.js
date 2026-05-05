@@ -9,8 +9,22 @@ export function unwrapSuccessEnvelope(raw) {
 // REST wrapper: supports core-backend (`feature/core-backend`) login paths + optional gateway aliases.
 // With VITE_DEMO_SEED=false, lists start empty and many API failures surface as empty data instead of synthetic charts.
 
+function resolveRecruiterAssistantBaseUrl() {
+  const dedicated = import.meta.env.VITE_RECRUITER_ASSISTANT_BASE_URL?.trim();
+  if (dedicated) {
+    const u = dedicated.replace(/\/$/, '');
+    return u.endsWith('/agent') ? u : `${u}/agent`;
+  }
+  const base = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  return `${base}/agent`;
+}
+
 export function makeApi({ getAuthToken } = {}) {
   const api = createApiClient({ getAuthToken });
+  const recruiterAssistantClient = createApiClient({
+    baseUrl: resolveRecruiterAssistantBaseUrl(),
+    getAuthToken,
+  });
 
   return {
     auth: {
@@ -81,6 +95,15 @@ export function makeApi({ getAuthToken } = {}) {
       status: (payload) => api.post('/ai/status', payload),
       candidateMatch: (payload) => api.post('/ai/candidate-match', payload),
       careerCoach: (payload) => api.post('/ai/career-coach', payload),
+    },
+    /** Recruiter Assistant (`services/recruiter-assistant`) — proxied at `/api/agent` when using the API gateway. */
+    recruiterAssistant: {
+      request: (payload) =>
+        recruiterAssistantClient.post('/request', payload, { timeoutMs: 60000 }),
+      result: (traceId) =>
+        recruiterAssistantClient.get(`/result/${encodeURIComponent(traceId)}`, { timeoutMs: 120000 }),
+      status: (traceId) =>
+        recruiterAssistantClient.get(`/status/${encodeURIComponent(traceId)}`, { timeoutMs: 30000 }),
     },
   };
 }

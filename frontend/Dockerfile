@@ -6,6 +6,13 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+
+# Required for production builds: Vite inlines `import.meta.env.VITE_*` at build time.
+# Compose passes `VITE_API_BASE_URL=/api` so the browser uses same-origin `/api` → nginx → api-gateway.
+# Without this, the bundle defaults to http://127.0.0.1:8000 and recruiter/auth calls fail with "Network error".
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 RUN npm run build
 
 FROM nginx:1.25-alpine
