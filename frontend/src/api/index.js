@@ -49,6 +49,7 @@ export function makeApi({ getAuthToken } = {}) {
     recruiters: {
       create: async (payload) => unwrapSuccessEnvelope(await api.post('/recruiters/create', payload)),
       get: async (payload) => unwrapSuccessEnvelope(await api.post('/recruiters/get', payload)),
+      search: async (payload) => unwrapSuccessEnvelope(await api.post('/recruiters/search', payload)),
     },
     jobs: {
       create: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/create', payload)),
@@ -77,8 +78,10 @@ export function makeApi({ getAuthToken } = {}) {
       request: (payload) => api.post('/connections/request', payload),
       accept: (payload) => api.post('/connections/accept', payload),
       reject: (payload) => api.post('/connections/reject', payload),
+      withdraw: (payload) => api.post('/connections/withdraw', payload),
       list: (payload) => api.post('/connections/list', payload),
       pending: (payload) => api.post('/connections/pending', payload),
+      sent: (payload) => api.post('/connections/sent', payload),
       mutual: (payload) => api.post('/connections/mutual', payload),
     },
     analytics: {
@@ -88,6 +91,8 @@ export function makeApi({ getAuthToken } = {}) {
       geo: async (payload) => unwrapSuccessEnvelope(await api.post('/analytics/geo', payload)),
       memberDashboard: async (payload) =>
         unwrapSuccessEnvelope(await api.post('/analytics/member/dashboard', payload)),
+      recruiterDashboard: async (payload) =>
+        unwrapSuccessEnvelope(await api.post('/analytics/recruiter/dashboard', payload)),
     },
     ai: {
       // FastAPI agent service should expose these.

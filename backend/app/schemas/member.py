@@ -94,6 +94,12 @@ class RecruiterGetRequest(BaseModel):
     recruiter_id: int
 
 
+class RecruiterSearchRequest(BaseModel):
+    keyword: str | None = None
+    page: int = 1
+    page_size: int = 20
+
+
 class RecruiterLoginRequest(BaseModel):
     email: EmailStr
     password: str

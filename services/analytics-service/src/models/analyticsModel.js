@@ -152,12 +152,15 @@ async function geoDistribution({ job_id, window_days = 30 }) {
 // whenever GET /members/get is called. Coordinate with M3 to emit the event.
 
 async function memberProfileViews({ member_id, window_days = 30 }) {
+  // entity_id may be stored as string or number depending on the event producer
+  const idStr = String(member_id);
+  const idNum = parseInt(member_id, 10);
   const results = await EventLog.aggregate([
     {
       $match: {
         event_type:  'profile.viewed',
         entity_type: 'member',
-        entity_id:   String(member_id),
+        entity_id:   { $in: [idStr, idNum] },
         timestamp:   { $gte: windowStart(window_days) },
       },
     },

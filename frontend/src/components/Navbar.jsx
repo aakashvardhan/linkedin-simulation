@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   useMockData,
   memberProfilePhotoKey,
@@ -13,11 +13,57 @@ import { CgProfile } from 'react-icons/cg';
 import './Navbar.css';
 
 const Navbar = () => {
-  const { userRole, userProfile, logout } = useMockData();
+  const { userRole, userProfile, logout, api } = useMockData();
   const location = useLocation();
+  const navigate = useNavigate();
   const [photoTick, setPhotoTick] = useState(0);
   const meLabel = userProfile?.displayName?.split(' ')[0] || 'Me';
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  const doSearch = useCallback(async (q) => {
+    if (!q.trim()) { setSearchResults([]); setSearchLoading(false); return; }
+    setSearchLoading(true);
+    try {
+      const [mRaw, rRaw] = await Promise.allSettled([
+        api.members.search({ keyword: q.trim(), page: 1, page_size: 6 }),
+        api.recruiters.search({ keyword: q.trim(), page: 1, page_size: 4 }),
+      ]);
+      const mData = mRaw.status === 'fulfilled' ? ((mRaw.value?.status === 'success' ? mRaw.value.data : mRaw.value) ?? {}) : {};
+      const rData = rRaw.status === 'fulfilled' ? ((rRaw.value?.status === 'success' ? rRaw.value.data : rRaw.value) ?? {}) : {};
+      const members = (Array.isArray(mData?.members) ? mData.members : []).map((m) => ({ ...m, _type: 'member' }));
+      const recruiters = (Array.isArray(rData?.recruiters) ? rData.recruiters : []).map((r) => ({ ...r, _type: 'recruiter' }));
+      setSearchResults([...members, ...recruiters]);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [api]);
+
+  const handleSearchChange = (e) => {
+    const q = e.target.value;
+    setSearchQuery(q);
+    setSearchOpen(true);
+    clearTimeout(debounceRef.current);
+    if (!q.trim()) { setSearchResults([]); setSearchLoading(false); return; }
+    setSearchLoading(true);
+    debounceRef.current = setTimeout(() => doSearch(q), 350);
+  };
+
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (searchRef.current && !searchRef.current.contains(e.target)) setSearchOpen(false);
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
 
   useEffect(() => {
     const onUpdate = () => setPhotoTick((t) => t + 1);
@@ -49,9 +95,72 @@ const Navbar = () => {
           <NavLink to="/home" className="navbar-logo" style={{ textDecoration: 'none' }}>
             <BrandMark />
           </NavLink>
-          <div className="navbar-search">
+          <div className="navbar-search" ref={searchRef} style={{ position: 'relative' }}>
             <FaSearch className="search-icon" size={14} color="#666666" />
-            <input type="text" placeholder="Search" />
+            <input
+              type="text"
+              placeholder="Search members…"
+              value={searchQuery}
+              onChange={handleSearchChange}
+              onFocus={() => { if (searchQuery.trim()) setSearchOpen(true); }}
+              autoComplete="off"
+            />
+            {searchOpen && (searchLoading || searchResults.length > 0 || searchQuery.trim()) && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, marginTop: '4px',
+                background: '#fff', border: '1px solid #e0e0df', borderRadius: '8px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.13)', zIndex: 9999, overflow: 'hidden',
+                minWidth: '280px',
+              }}>
+                {searchLoading && (
+                  <div style={{ padding: '12px 16px', fontSize: '13px', color: '#666' }}>Searching…</div>
+                )}
+                {!searchLoading && searchResults.length === 0 && searchQuery.trim() && (
+                  <div style={{ padding: '12px 16px', fontSize: '13px', color: '#666' }}>No members found for &quot;{searchQuery}&quot;</div>
+                )}
+                {!searchLoading && searchResults.map((result) => {
+                  const isMember = result._type === 'member';
+                  const id = isMember ? result.member_id : result.recruiter_id;
+                  const name = [result.first_name, result.last_name].filter(Boolean).join(' ') || (isMember ? 'Member' : 'Recruiter');
+                  const initials = name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+                  const subtitle = isMember
+                    ? (result.headline || result.location_city || '')
+                    : `${result.company_name || ''}${result.company_industry ? ` · ${result.company_industry}` : ''}`;
+                  const avatarBg = isMember ? '#0A66C2' : '#057642';
+                  const path = isMember ? `/in/${id}` : `/profile/recruiter/${id}`;
+                  const badge = isMember ? null : 'Recruiter';
+                  return (
+                    <div key={`${result._type}-${id}`} style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = '#f3f6f9'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    onClick={() => {
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                      setSearchResults([]);
+                      navigate(path);
+                    }}
+                    >
+                      <div style={{
+                        width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                        background: avatarBg, color: '#fff', display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                        fontSize: '13px', fontWeight: 700,
+                      }}>{initials}</div>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#000000e6', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                          {badge && <span style={{ fontSize: '10px', background: '#e6f4ea', color: '#057642', borderRadius: '4px', padding: '1px 5px', fontWeight: 600, flexShrink: 0 }}>{badge}</span>}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

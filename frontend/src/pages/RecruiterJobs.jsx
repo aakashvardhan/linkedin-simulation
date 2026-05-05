@@ -23,6 +23,43 @@ const STEP_LABELS = {
   candidates_ranked: 'Rank Candidates',
 };
 
+function inferSkillsFromJob(job) {
+  const hay = `${job?.title || ''} ${job?.description || ''}`.toLowerCase();
+  const skills = [];
+  const known = [
+    'python',
+    'java',
+    'javascript',
+    'typescript',
+    'react',
+    'node',
+    'fastapi',
+    'django',
+    'flask',
+    'sql',
+    'mysql',
+    'postgres',
+    'mongodb',
+    'redis',
+    'kafka',
+    'spark',
+    'aws',
+    'docker',
+    'kubernetes',
+    'terraform',
+    'airflow',
+  ];
+  for (const k of known) {
+    if (hay.includes(k) && !skills.includes(k)) skills.push(k);
+  }
+  // Present nicely for the assistant + UI
+  return skills.map((s) => {
+    if (s === 'sql') return 'SQL';
+    if (s === 'aws') return 'AWS';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  });
+}
+
 function AgentTracePanel({ steps, isLive = false }) {
   const byStep = {};
   steps.forEach((s) => {
@@ -227,6 +264,10 @@ const RecruiterJobs = () => {
 
     try {
       const actorId = String(userProfile?.recruiter_id ?? userProfile?.id ?? 'recruiter');
+      const skillsRequired =
+        Array.isArray(job.skills_required) && job.skills_required.length
+          ? job.skills_required
+          : inferSkillsFromJob(job);
       const jobPayload = {
         id: job.id,
         title: job.title,
@@ -236,7 +277,7 @@ const RecruiterJobs = () => {
         remote: !!job.remote,
         industry: job.industry || '',
         type: job.type || '',
-        skills_required: Array.isArray(job.skills_required) ? job.skills_required : [],
+        skills_required: skillsRequired,
       };
       const candidates = applicants.map((a) => ({
         candidate_id: String(a.id),
@@ -309,7 +350,18 @@ const RecruiterJobs = () => {
   };
 
   const STATUS_COLORS = { verified: '#004182', needs_review: '#c37d16', flagged: '#cc0000' };
-  const SCORE_COLOR = (s) => s >= 85 ? '#057642' : s >= 70 ? '#c37d16' : '#cc0000';
+  const formatEval = (ev) => {
+    const key = String(ev?.key || '').trim();
+    const raw = ev?.value == null ? '' : String(ev.value);
+    // Turn "• ..." blocks into readable bullets
+    const bullets = raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => l.replace(/^[-*•]\s*/, ''))
+      .filter(Boolean);
+    return { key, raw, bullets };
+  };
 
   return (
     <div style={{ gridColumn: 'span 3', display: 'flex', gap: '24px' }}>
@@ -618,17 +670,28 @@ const RecruiterJobs = () => {
                           <p style={{ fontSize: '14px', fontWeight: '600', margin: 0, color: '#000000e6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</p>
                           <p style={{ fontSize: '11px', color: '#666', margin: '1px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.headline}</p>
                         </div>
-                        <div style={{ backgroundColor: SCORE_COLOR(c.matchScore) + '18', color: SCORE_COLOR(c.matchScore), fontWeight: '700', fontSize: '13px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap' }}>
-                          {c.matchScore}/100
-                        </div>
                       </div>
 
                       {/* Skill pills */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '10px' }}>
-                        {c.matchedSkills.slice(0, 4).map((sk) => (
-                          <span key={sk} style={{ backgroundColor: '#eef3f8', color: '#004182', borderRadius: '12px', padding: '2px 8px', fontSize: '11px', fontWeight: '500' }}>{sk}</span>
-                        ))}
-                      </div>
+                      {Array.isArray(c.matchedSkills) && c.matchedSkills.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '10px' }}>
+                          {c.matchedSkills.slice(0, 6).map((sk) => (
+                            <span
+                              key={sk}
+                              style={{
+                                backgroundColor: '#eef3f8',
+                                color: '#004182',
+                                borderRadius: '12px',
+                                padding: '2px 8px',
+                                fontSize: '11px',
+                                fontWeight: '500',
+                              }}
+                            >
+                              {sk}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
 
                       {/* Email draft toggle */}
                       <button
@@ -665,17 +728,78 @@ const RecruiterJobs = () => {
 
                       {/* Human Evaluation */}
                       <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
-                        <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Human Evaluation Required</p>
-                        {c.humanEvaluation.map((ev) => (
-                          <div key={ev.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: '12px' }}>
-                            <span style={{ color: '#333' }}>{ev.key}</span>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#555' }}>
-                              {ev.value}
-                              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: STATUS_COLORS[ev.status] || '#999', display: 'inline-block', flexShrink: 0 }} />
-                            </span>
-                          </div>
-                        ))}
+                        <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          Evaluation Summary
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {c.humanEvaluation.map((ev) => {
+                            const { key, raw, bullets } = formatEval(ev);
+                            const dot = STATUS_COLORS[ev.status] || '#999';
+                            return (
+                              <div key={key} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: dot, marginTop: '6px', flexShrink: 0 }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#333', marginBottom: '2px' }}>{key}</div>
+                                  {bullets.length > 1 ? (
+                                    <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '12px', color: '#555', lineHeight: 1.45 }}>
+                                      {bullets.slice(0, 4).map((b) => (
+                                        <li key={b} style={{ marginBottom: '3px' }}>{b}</li>
+                                      ))}
+                                    </ul>
+                                  ) : (
+                                    <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>
+                                      {raw}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
+
+                      {/* Interview questions (from recruiter-assistant) */}
+                      {c.interviewQuestions &&
+                      ((c.interviewQuestions.technical && c.interviewQuestions.technical.length) ||
+                        (c.interviewQuestions.behavioral && c.interviewQuestions.behavioral.length) ||
+                        (c.interviewQuestions.skillGaps && c.interviewQuestions.skillGaps.length)) ? (
+                        <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
+                          <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Interview Questions
+                          </p>
+                          {Array.isArray(c.interviewQuestions.skillGaps) && c.interviewQuestions.skillGaps.length > 0 ? (
+                            <div style={{ marginBottom: '8px', fontSize: '12px', color: '#555' }}>
+                              <strong>Skill gaps:</strong> {c.interviewQuestions.skillGaps.slice(0, 6).join(', ')}
+                            </div>
+                          ) : null}
+
+                          {Array.isArray(c.interviewQuestions.technical) && c.interviewQuestions.technical.length > 0 ? (
+                            <details style={{ marginBottom: '8px' }}>
+                              <summary style={{ fontSize: '12px', fontWeight: 600, color: '#333', cursor: 'pointer' }}>
+                                Technical ({c.interviewQuestions.technical.length})
+                              </summary>
+                              <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontSize: '12px', color: '#333', lineHeight: 1.45 }}>
+                                {c.interviewQuestions.technical.slice(0, 6).map((q) => (
+                                  <li key={q} style={{ marginBottom: '6px' }}>{q}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+
+                          {Array.isArray(c.interviewQuestions.behavioral) && c.interviewQuestions.behavioral.length > 0 ? (
+                            <details>
+                              <summary style={{ fontSize: '12px', fontWeight: 600, color: '#333', cursor: 'pointer' }}>
+                                Behavioral ({c.interviewQuestions.behavioral.length})
+                              </summary>
+                              <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontSize: '12px', color: '#333', lineHeight: 1.45 }}>
+                                {c.interviewQuestions.behavioral.slice(0, 5).map((q) => (
+                                  <li key={q} style={{ marginBottom: '6px' }}>{q}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}

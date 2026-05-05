@@ -161,10 +161,14 @@ exports.memberDashboard = async (req, res, next) => {
       return error(res, 400, 400, 'Missing required field: member_id');
     }
 
+    // Accept both string and numeric member_id in all field comparisons
+    const midStr = String(member_id);
+    const midNum = parseInt(member_id, 10);
+
     const [profileViews, statusDocs] = await Promise.all([
       analytics.memberProfileViews({ member_id, window_days: 30 }),
 
-      // Correct $or covers both event types:
+      // Correct $or covers both event types and both stored types (string/number):
       // - application.submitted events:    actor_id = member_id
       // - application.statusChanged events: payload.member_id = member_id
       EventLog.aggregate([
@@ -172,8 +176,8 @@ exports.memberDashboard = async (req, res, next) => {
           $match: {
             event_type: { $in: ['application.submitted', 'application.statusChanged'] },
             $or: [
-              { actor_id:            String(member_id) },
-              { 'payload.member_id': String(member_id) },
+              { actor_id:            { $in: [midStr, midNum] } },
+              { 'payload.member_id': { $in: [midStr, midNum] } },
             ],
           },
         },

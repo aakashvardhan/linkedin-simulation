@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class ConnectionRequestCreate(BaseModel):
     requester_id: int
     receiver_id: int
+    receiver_type: str = 'member'
 
 
 class ConnectionActionRequest(BaseModel):
@@ -26,3 +27,8 @@ class PendingConnectionsRequest(BaseModel):
     user_id: int
     page: int = 1
     page_size: int = 20
+
+
+class ConnectionWithdrawRequest(BaseModel):
+    request_id: int
+    requester_id: int

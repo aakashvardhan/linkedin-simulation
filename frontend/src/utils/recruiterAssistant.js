@@ -14,8 +14,7 @@ function mapOneRankedRow(row, applicantsById) {
     const headline = applicant?.headline || '';
 
     const overlap = Array.isArray(row.skills_overlap) ? row.skills_overlap : [];
-    const matchedSkills =
-      overlap.length > 0 ? overlap.map((s) => String(s)) : ['Skills overlap pending'];
+  const matchedSkills = overlap.length > 0 ? overlap.map((s) => String(s)) : [];
 
     const rawScore = Number(row.match_score ?? 0);
     const scorePct =
@@ -79,6 +78,11 @@ function mapOneRankedRow(row, applicantsById) {
     matchedSkills,
     emailDraft: draft,
     humanEvaluation,
+    interviewQuestions: {
+      skillGaps: Array.isArray(iq?.skill_gaps) ? iq.skill_gaps.map(String) : [],
+      technical: Array.isArray(iq?.technical_questions) ? iq.technical_questions.map(String) : [],
+      behavioral: Array.isArray(iq?.behavioral_questions) ? iq.behavioral_questions.map(String) : [],
+    },
   };
 }
 

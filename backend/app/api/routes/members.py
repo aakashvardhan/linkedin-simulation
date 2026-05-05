@@ -24,6 +24,7 @@ from app.schemas.member import (
     RecruiterCreateRequest,
     RecruiterGetRequest,
     RecruiterLoginRequest,
+    RecruiterSearchRequest,
 )
 
 router = APIRouter()
@@ -385,6 +386,41 @@ def get_recruiter(payload: RecruiterGetRequest, db: Session = Depends(get_db)):
             'created_at': recruiter.created_at,
         }
     )
+
+
+@router.post('/recruiters/search')
+def search_recruiters(payload: RecruiterSearchRequest, db: Session = Depends(get_db)):
+    query = db.query(Recruiter).join(Company)
+    if payload.keyword:
+        term = f'%{payload.keyword}%'
+        query = query.filter(
+            or_(
+                Recruiter.first_name.ilike(term),
+                Recruiter.last_name.ilike(term),
+                Company.name.ilike(term),
+                Company.industry.ilike(term),
+            )
+        )
+    total_count = query.count()
+    page = max(payload.page, 1)
+    page_size = max(payload.page_size, 1)
+    recruiters = query.order_by(Recruiter.recruiter_id.asc()).offset((page - 1) * page_size).limit(page_size).all()
+    return success_response({
+        'recruiters': [
+            {
+                'recruiter_id': r.recruiter_id,
+                'first_name': r.first_name,
+                'last_name': r.last_name,
+                'company_name': r.company.name,
+                'company_industry': r.company.industry,
+                'role': r.role,
+            }
+            for r in recruiters
+        ],
+        'total_count': total_count,
+        'page': page,
+        'page_size': page_size,
+    })
 
 
 @router.post('/recruiters/login')

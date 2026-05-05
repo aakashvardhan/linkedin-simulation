@@ -4,8 +4,6 @@ import { useMockData } from './context/MockDataContext';
 import MainLayout from './layout/MainLayout';
 import Login from './pages/Login';
 
-const AgentWidgetLazy = lazy(() => import('./components/AgentWidget'));
-
 /** Lazy so `/login` never loads `pdfjs-dist` (Jobs/Profile/CareerCoach pull it in; Vite + pdfjs can TDZ as `controller`). */
 const Home = lazy(() => import('./pages/Home'));
 const Network = lazy(() => import('./pages/Network'));
@@ -16,6 +14,8 @@ const Profile = lazy(() => import('./pages/Profile'));
 const RecruiterDashboard = lazy(() => import('./pages/RecruiterDashboard'));
 const RecruiterJobs = lazy(() => import('./pages/RecruiterJobs'));
 const RecruiterProfile = lazy(() => import('./pages/RecruiterProfile'));
+const MemberProfile = lazy(() => import('./pages/MemberProfile'));
+const RecruiterPublicProfile = lazy(() => import('./pages/RecruiterPublicProfile'));
 
 function RouteFallback() {
   return (
@@ -44,6 +44,8 @@ function AuthenticatedRoutes() {
           <Route path="/recruiter/profile" element={<RecruiterProfile />} />
           <Route path="/network" element={<Network />} />
           <Route path="/messaging" element={<Messaging />} />
+          <Route path="/in/:memberId" element={<MemberProfile />} />
+          <Route path="/profile/recruiter/:recruiterId" element={<RecruiterPublicProfile />} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </Suspense>
@@ -59,6 +61,8 @@ function AuthenticatedRoutes() {
         <Route path="/messaging" element={<Messaging />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/in/me" element={<Profile />} />
+        <Route path="/in/:memberId" element={<MemberProfile />} />
+        <Route path="/profile/recruiter/:recruiterId" element={<RecruiterPublicProfile />} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </Suspense>
@@ -74,7 +78,6 @@ function AppShell() {
 }
 
 function App() {
-  const { userRole } = useMockData();
   return (
     <BrowserRouter>
       <Routes>
@@ -90,11 +93,6 @@ function App() {
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      {userRole ? (
-        <Suspense fallback={null}>
-          <AgentWidgetLazy />
-        </Suspense>
-      ) : null}
     </BrowserRouter>
   );
 }

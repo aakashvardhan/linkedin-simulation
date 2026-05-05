@@ -9,6 +9,7 @@ linkedin_env/
 !.env.example
 !.env.*.example
 *.local
+*.pem
 
 # ── Python (backend, services/*, recruiter-assistant, tools) ───────────────────
 __pycache__/

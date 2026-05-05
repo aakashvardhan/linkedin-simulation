@@ -132,15 +132,18 @@ function mapBackendApplicationRow(row) {
 
   // Build a rich resume summary for the AI service from all available fields
   const coverLetter = (row?.resume_summary || row?.cover_letter || '').trim();
-  let resumeSummary = coverLetter;
-  if (coverLetter.length < 200) {
-    const parts = [];
-    if (name && name !== 'Member') parts.push(`Name: ${name}`);
-    if (headline) parts.push(`Title: ${headline}`);
-    const skills = Array.isArray(row?.skills) ? row.skills : [];
-    if (skills.length) parts.push(`Skills: ${skills.join(', ')}`);
-    const profileText = parts.join('\n');
-    resumeSummary = profileText + (coverLetter ? `\n\n${coverLetter}` : '');
+  const parts = [];
+  if (name && name !== 'Member') parts.push(`Name: ${name}`);
+  if (headline) parts.push(`Title: ${headline}`);
+  const skills = Array.isArray(row?.skills) ? row.skills : [];
+  if (skills.length) parts.push(`Skills: ${skills.join(', ')}`);
+  const profileText = parts.join('\n');
+
+  // Always include structured fields (especially Skills) to make non-LLM parsing reliable,
+  // then append the cover letter for extra context.
+  let resumeSummary = profileText;
+  if (coverLetter) {
+    resumeSummary = (resumeSummary ? `${resumeSummary}\n\n${coverLetter}` : coverLetter);
   }
 
   return {
@@ -162,8 +165,13 @@ function unwrapApiEnvelope(raw) {
 
 function mapBackendConnectionRow(row) {
   const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || 'Member';
+  const userType = row.user_type || 'member';
+  const rawId = row.member_id;
+  const stateId = userType === 'recruiter' ? `r-${rawId}` : rawId;
   return {
-    id: row.member_id,
+    id: stateId,
+    rawId,
+    userType,
     name,
     headline: row.headline || '',
     mutual: 0,
@@ -177,6 +185,7 @@ function mapBackendPendingInvite(row) {
     id: `pending-${row.request_id}`,
     request_id: row.request_id,
     requester_id: row.requester_id,
+    requester_type: row.requester_type || 'member',
     name,
     headline: row.headline || '',
     mutual: 0,
@@ -196,6 +205,7 @@ export function notifyProfilePhotoUpdated() {
 export const savedJobsStorageKey = (email) => `linkdln:savedJobIds:${email || 'me'}`;
 export const incomingInvitesStorageKey = (email) => `linkdln:incomingInvites:${email || 'me'}`;
 export const conversationsStorageKey = (email) => `linkdln:conversations:${email || 'me'}`;
+export const connectionsStorageKey = (email) => `linkdln:connections:${email || 'me'}`;
 
 const defaultIncomingInvites = () =>
   DEMO_SEED_ENABLED
@@ -368,6 +378,8 @@ export const MockDataProvider = ({ children }) => {
   const [savedJobIds, setSavedJobIds] = useState(() => new Set());
   const [incomingInvites, setIncomingInvites] = useState(defaultIncomingInvites);
   const [conversationStore, setConversationStore] = useState(defaultConversationStore);
+  /** Maps participantId (string) → display name for the messaging inbox. */
+  const [peerNames, setPeerNames] = useState({});
   const incomingInvitesRef = useRef(incomingInvites);
   useEffect(() => {
     incomingInvitesRef.current = incomingInvites;
@@ -467,6 +479,39 @@ export const MockDataProvider = ({ children }) => {
       /* ignore */
     }
   }, [incomingInvites, userProfile?.email]);
+
+  /** Restore pending/connected connections from localStorage on login. */
+  useEffect(() => {
+    const email = userProfile?.email;
+    if (!email) return;
+    try {
+      const raw = localStorage.getItem(connectionsStorageKey(email));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length) {
+          setConnections((prev) => {
+            const map = new Map(prev.map((c) => [String(c.id), c]));
+            for (const c of parsed) {
+              // Only restore non-suggestion entries; 'none' suggestions are re-fetched live
+              if (c.status !== 'none') map.set(String(c.id), c);
+            }
+            return Array.from(map.values());
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }, [userProfile?.email]);
+
+  /** Persist only pending/connected entries — not 'none' suggestions (those reload from backend). */
+  useEffect(() => {
+    const email = userProfile?.email;
+    if (!email) return;
+    const toSave = connections.filter((c) => c.status !== 'none');
+    if (!toSave.length) return;
+    try {
+      localStorage.setItem(connectionsStorageKey(email), JSON.stringify(toSave));
+    } catch { /* ignore */ }
+  }, [connections, userProfile?.email]);
 
   useEffect(() => {
     const email = userProfile?.email;
@@ -581,64 +626,113 @@ export const MockDataProvider = ({ children }) => {
     };
   }, [api, authToken, userRole, jobIdsKey, jobs]);
 
-  /** Hydrate member connections + incoming invites from core backend after login. */
+  /** Hydrate connections + incoming invites + sent pending requests for both MEMBER and RECRUITER; polls every 8 s. */
   useEffect(() => {
-    if (!BACKEND_INTEGRATION || !authToken || userRole !== 'MEMBER') return undefined;
-    const mid = userProfile?.member_id ?? userProfile?.id;
+    if (!BACKEND_INTEGRATION || !authToken || (userRole !== 'MEMBER' && userRole !== 'RECRUITER')) return undefined;
+    // For MEMBER use member_id; for RECRUITER use recruiter_id
+    const mid = userRole === 'RECRUITER'
+      ? (userProfile?.recruiter_id ?? userProfile?.id)
+      : (userProfile?.member_id ?? userProfile?.id);
     if (mid == null || Number.isNaN(Number(mid))) return undefined;
 
     let cancelled = false;
-    (async () => {
-      try {
-        const uid = Number(mid);
-        const [listRaw, pendingRaw] = await Promise.all([
-          api.connections.list({ user_id: uid, page: 1, page_size: 200 }),
-          api.connections.pending({ user_id: uid, page: 1, page_size: 100 }),
-        ]);
-        if (cancelled) return;
 
-        const listData = unwrapApiEnvelope(listRaw);
-        const pendData = unwrapApiEnvelope(pendingRaw);
-        const apiConnected = Array.isArray(listData?.connections)
-          ? listData.connections.map(mapBackendConnectionRow)
-          : [];
-        const apiPendingInvites = Array.isArray(pendData?.requests)
-          ? pendData.requests.map(mapBackendPendingInvite)
-          : [];
+    const syncConnections = async () => {
+      if (cancelled) return;
+      const uid = Number(mid);
+      // Use allSettled so one failing endpoint (e.g. /connections/sent not yet deployed)
+      // never silently swallows the other results.
+      const [listRes, pendingRes, sentRes] = await Promise.allSettled([
+        api.connections.list({ user_id: uid, page: 1, page_size: 200 }),
+        api.connections.pending({ user_id: uid, page: 1, page_size: 100 }),
+        api.connections.sent({ user_id: uid, page: 1, page_size: 100 }),
+      ]);
+      if (cancelled) return;
 
+      const listData = listRes.status === 'fulfilled' ? unwrapApiEnvelope(listRes.value) : null;
+      const pendData = pendingRes.status === 'fulfilled' ? unwrapApiEnvelope(pendingRes.value) : null;
+      const sentData = sentRes.status === 'fulfilled' ? unwrapApiEnvelope(sentRes.value) : null;
+
+      const apiConnected = Array.isArray(listData?.connections)
+        ? listData.connections.map(mapBackendConnectionRow)
+        : [];
+
+      const apiPendingInvites = Array.isArray(pendData?.requests)
+        ? pendData.requests.map(mapBackendPendingInvite)
+        : [];
+
+      // Outbound pending requests — map them to connection entries with status 'pending'
+      const apiSentPending = Array.isArray(sentData?.requests)
+        ? sentData.requests.map((r) => {
+            const name = [r.first_name, r.last_name].filter(Boolean).join(' ').trim() || 'Member';
+            const rType = r.receiver_type || 'member';
+            const rawId = r.receiver_id;
+            const stateId = rType === 'recruiter' ? `r-${rawId}` : rawId;
+            return { id: stateId, rawId, userType: rType, name, headline: r.headline || '', mutual: 0, status: 'pending', request_id: r.request_id };
+          })
+        : [];
+
+      // Only update connections if at least one call succeeded
+      if (listRes.status === 'fulfilled' || sentRes.status === 'fulfilled') {
         setConnections((prev) => {
-          const outboundPending = prev.filter((c) => c.status === 'pending');
           const connectedIds = new Set(apiConnected.map((c) => String(c.id)));
-          const keepPending = outboundPending.filter((p) => !connectedIds.has(String(p.id)));
-
-          if (REPLACE_SEED_CONNECTIONS) {
-            return [...apiConnected, ...keepPending];
-          }
-          const map = new Map();
-          for (const c of prev) map.set(String(c.id), c);
+          const map = new Map(prev.map((c) => [String(c.id), c]));
           for (const c of apiConnected) map.set(String(c.id), c);
+          for (const c of apiSentPending) {
+            if (!connectedIds.has(String(c.id))) map.set(String(c.id), c);
+          }
           return Array.from(map.values());
         });
-
-        if (REPLACE_SEED_CONNECTIONS) {
-          setIncomingInvites(apiPendingInvites);
-        } else if (apiPendingInvites.length) {
-          setIncomingInvites((prev) => {
-            const map = new Map();
-            for (const i of prev) map.set(String(i.id), i);
-            for (const i of apiPendingInvites) map.set(String(i.id), i);
-            return Array.from(map.values());
-          });
-        }
-      } catch {
-        /* keep local / seeded network */
       }
-    })();
+
+      // Update incoming invites whenever the pending call succeeded
+      if (pendingRes.status === 'fulfilled') {
+        setIncomingInvites(apiPendingInvites);
+      }
+    };
+
+    syncConnections();
+    const pollId = setInterval(syncConnections, 8000);
 
     return () => {
       cancelled = true;
+      clearInterval(pollId);
     };
-  }, [api, authToken, userRole, userProfile?.member_id, userProfile?.id]);
+  }, [api, authToken, userRole, userProfile?.member_id, userProfile?.recruiter_id, userProfile?.id]);
+
+  /** When demo seed is off (production/Docker), load member list from backend as "People you may know" suggestions. */
+  useEffect(() => {
+    if (!BACKEND_INTEGRATION || !authToken || DEMO_SEED_ENABLED) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await api.members.search({ page: 1, page_size: 30 });
+        if (cancelled) return;
+        const data = unwrapApiEnvelope(raw);
+        const members = Array.isArray(data?.members) ? data.members : [];
+        const currentMemberId = String(userProfile?.member_id ?? userProfile?.id ?? '');
+        const suggestions = members
+          .filter((m) => String(m.member_id) !== currentMemberId)
+          .map((m) => ({
+            id: m.member_id,
+            name: [m.first_name, m.last_name].filter(Boolean).join(' ').trim() || 'Member',
+            headline: m.headline || '',
+            mutual: Math.min(m.connections_count ?? 0, 50),
+            status: 'none',
+          }));
+        if (!cancelled && suggestions.length) {
+          setConnections((prev) => {
+            const existingIds = new Set(prev.map((c) => String(c.id)));
+            const newSuggestions = suggestions.filter((s) => !existingIds.has(String(s.id)));
+            return newSuggestions.length ? [...prev, ...newSuggestions] : prev;
+          });
+        }
+      } catch {
+        /* leave network empty rather than crashing */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [api, authToken, userProfile?.member_id, userProfile?.id]);
 
   /** Merge DummyJSON + optional VITE_EXTRA_SEED_URL (e.g. Kaggle export hosted as JSON). */
   useEffect(() => {
@@ -762,25 +856,91 @@ export const MockDataProvider = ({ children }) => {
   const getRecruiterAnalytics = async ({ window = 'month', job_id } = {}) => {
     const empty = demoRecruiterAnalytics;
     try {
-      const [top, geo, jobsTop, saved] = await Promise.all([
-        api.analytics.jobsTop({ window, metric: 'applications', limit: 10 }),
-        api.analytics.geo({ window, job_id }),
-        api.analytics.jobsTop({ window, metric: 'clicks', limit: 10 }),
-        api.analytics.funnel({ window, job_id }),
-      ]);
+      const window_days = window === 'week' ? 7 : 30;
+      const rid = userProfile?.recruiter_id ?? null;
 
-      const clicksRaw = Array.isArray(jobsTop?.items) ? jobsTop.items : [];
+      const dash = await api.analytics.recruiterDashboard({
+        recruiter_id: rid,
+        window_days,
+      });
+
+      // Build a title lookup map from already-loaded jobs state (fast, no extra API calls)
+      const titleMap = new Map(jobs.map((j) => [String(j.id), j.title]));
+
+      // For any job_id not in the loaded jobs, fetch titles in parallel
+      const allJobIds = [
+        ...(dash?.top_jobs_by_applications || []),
+        ...(dash?.low_traction_jobs || []),
+        ...(dash?.clicks_per_job || []),
+      ].map((x) => String(x.job_id)).filter((id) => id && !titleMap.has(id));
+      const missingIds = [...new Set(allJobIds)];
+
+      await Promise.allSettled(
+        missingIds.map(async (jid) => {
+          try {
+            const d = await api.jobs.get({ job_id: Number(jid) });
+            if (d?.title) titleMap.set(jid, d.title);
+          } catch { /* fallback to Job #id */ }
+        })
+      );
+
+      const jobTitle = (rawId) => {
+        const id = String(rawId);
+        return titleMap.get(id) || `Job #${id}`;
+      };
+
+      // ── top jobs by applications ──────────────────────────────────────────
+      const CHART_COLORS = ['#0A66C2','#004182','#378fe9','#70b5f9','#c37d16','#d11124','#057642','#1a8a42'];
+      const topJobsRaw = Array.isArray(dash?.top_jobs_by_applications) ? dash.top_jobs_by_applications : [];
+      const topJobsByApplicationsMonth = topJobsRaw.map((x, i) => ({
+        job_id: x.job_id,
+        title: jobTitle(x.job_id),
+        count: Number(x.application_count ?? x.count ?? 0),
+        color: CHART_COLORS[i % CHART_COLORS.length],
+      }));
+
+      // ── city-wise geo summary (pie chart) ─────────────────────────────────
+      const geoRaw = Array.isArray(dash?.geo_summary?.distribution) ? dash.geo_summary.distribution : [];
+      const cityWiseApplicationsMonth = geoRaw.map((x, i) => ({
+        name: x.city && x.city !== 'Unknown' ? `${x.city}, ${x.state}` : (x.state || 'Unknown'),
+        value: Number(x.count ?? 0),
+        color: CHART_COLORS[i % CHART_COLORS.length],
+      }));
+
+      // ── low-traction jobs ─────────────────────────────────────────────────
+      const lowRaw = Array.isArray(dash?.low_traction_jobs) ? dash.low_traction_jobs : [];
+      const lowTractionJobs = lowRaw.map((x) => ({
+        job_id: x.job_id,
+        title: jobTitle(x.job_id),
+        applicants: Number(x.application_count ?? x.count ?? 0),
+      }));
+
+      // ── clicks per job (bar chart) ────────────────────────────────────────
+      const clicksRaw = Array.isArray(dash?.clicks_per_job) ? dash.clicks_per_job : [];
       const clicksPerJob = clicksRaw.map((x) => ({
-        title: x.title,
-        clicks: Number(x.count ?? x.clicks ?? 0),
+        job_id: x.job_id,
+        title: x.title || jobTitle(x.job_id),
+        clicks: Number(x.clicks ?? 0),
+      }));
+
+      // ── saves per day (line chart) ────────────────────────────────────────
+      const savesRaw = Array.isArray(dash?.saves_per_day) ? dash.saves_per_day : [];
+      const savedJobsSeries = savesRaw.map((x) => ({
+        name: x.date ? x.date.slice(5) : '',  // show MM-DD
+        saves: Number(x.count ?? 0),
       }));
 
       return {
-        topJobsByApplicationsMonth: top?.items ?? (DEMO_SEED_ENABLED ? empty.topJobsByApplicationsMonth : []),
-        cityWiseApplicationsMonth: geo?.items ?? (DEMO_SEED_ENABLED ? empty.cityWiseApplicationsMonth : []),
-        lowTractionJobs: top?.low_traction ?? (DEMO_SEED_ENABLED ? empty.lowTractionJobs : []),
-        clicksPerJob: clicksPerJob.length ? clicksPerJob : DEMO_SEED_ENABLED ? empty.clicksPerJob : [],
-        savedJobsSeries: saved?.saved_series ?? (DEMO_SEED_ENABLED ? empty.savedJobsSeries : []),
+        topJobsByApplicationsMonth: topJobsByApplicationsMonth.length
+          ? topJobsByApplicationsMonth : (DEMO_SEED_ENABLED ? empty.topJobsByApplicationsMonth : []),
+        cityWiseApplicationsMonth: cityWiseApplicationsMonth.length
+          ? cityWiseApplicationsMonth : (DEMO_SEED_ENABLED ? empty.cityWiseApplicationsMonth : []),
+        lowTractionJobs: lowTractionJobs.length
+          ? lowTractionJobs : (DEMO_SEED_ENABLED ? empty.lowTractionJobs : []),
+        clicksPerJob: clicksPerJob.length
+          ? clicksPerJob : (DEMO_SEED_ENABLED ? empty.clicksPerJob : []),
+        savedJobsSeries: savedJobsSeries.length
+          ? savedJobsSeries : (DEMO_SEED_ENABLED ? empty.savedJobsSeries : []),
       };
     } catch {
       return empty;
@@ -795,10 +955,41 @@ export const MockDataProvider = ({ children }) => {
         return empty;
       }
       const res = await api.analytics.memberDashboard({ member_id: mid, window });
+
+      // API returns profile_views.daily (array of {date, views}) and
+      // application_status (object of {submitted, reviewing, ...total}).
+      // Chart needs {name, views} for LineChart and {name, value, color} for PieChart.
+      const STATUS_COLORS = {
+        submitted: '#0A66C2',
+        reviewing: '#c37d16',
+        interview: '#378fe9',
+        offer:     '#004182',
+        rejected:  '#cc0000',
+        other:     '#666666',
+      };
+
+      const viewsSeries = Array.isArray(res?.profile_views?.daily)
+        ? res.profile_views.daily.map((d) => ({
+            name: d.date ? d.date.slice(5) : d.date,
+            views: d.views,
+          }))
+        : (DEMO_SEED_ENABLED ? empty.profileViewsLast30Days : []);
+
+      const statusObj = res?.application_status ?? null;
+      const statusBreakdown = statusObj
+        ? Object.entries(statusObj)
+            .filter(([key]) => key !== 'total')
+            .map(([status, count]) => ({
+              name:  status.charAt(0).toUpperCase() + status.slice(1),
+              value: Number(count),
+              color: STATUS_COLORS[status] || '#999999',
+            }))
+            .filter((e) => e.value > 0)
+        : (DEMO_SEED_ENABLED ? empty.applicationStatusBreakdown : []);
+
       return {
-        profileViewsLast30Days: res?.profile_views_series ?? (DEMO_SEED_ENABLED ? empty.profileViewsLast30Days : []),
-        applicationStatusBreakdown:
-          res?.application_status_breakdown ?? (DEMO_SEED_ENABLED ? empty.applicationStatusBreakdown : []),
+        profileViewsLast30Days: viewsSeries,
+        applicationStatusBreakdown: statusBreakdown,
       };
     } catch {
       return empty;
@@ -1200,43 +1391,81 @@ export const MockDataProvider = ({ children }) => {
     [api, userRole, userProfile?.recruiter_id, userProfile?.member_id],
   );
 
-  const requestConnection = async (userId) => {
-    setConnections((prev) =>
-      prev.map((c) => (c.id === userId ? { ...c, status: 'pending' } : c)),
-    );
+  const requestConnection = async (userId, memberInfo = null, receiverType = 'member') => {
+    // Use a namespaced key to avoid collisions between member and recruiter IDs
+    const stateKey = `${receiverType[0]}-${userId}`;
+    setConnections((prev) => {
+      const exists = prev.some((c) => String(c.id) === stateKey);
+      if (exists) {
+        return prev.map((c) => (String(c.id) === stateKey ? { ...c, status: 'pending' } : c));
+      }
+      return [
+        ...prev,
+        {
+          id: stateKey,
+          rawId: userId,
+          userType: receiverType,
+          name: memberInfo?.name || (receiverType === 'recruiter' ? 'Recruiter' : 'Member'),
+          headline: memberInfo?.headline || '',
+          mutual: 0,
+          status: 'pending',
+        },
+      ];
+    });
     try {
-      await api.connections.request({ requester_id: memberKey, receiver_id: userId });
+      await api.connections.request({ requester_id: memberKey, receiver_id: userId, receiver_type: receiverType });
     } catch {
       // ignore for now
     }
   };
 
-  const withdrawConnectionRequest = useCallback((userId) => {
-    setConnections((prev) =>
-      prev.map((c) => (c.id === userId && c.status === 'pending' ? { ...c, status: 'none' } : c)),
-    );
-  }, []);
+  const withdrawConnectionRequest = useCallback(async (userId) => {
+    // Optimistically remove from local state immediately so the UI responds at once
+    let requestId = null;
+    setConnections((prev) => {
+      const entry = prev.find((c) => String(c.id) === String(userId) && c.status === 'pending');
+      if (entry) requestId = entry.request_id ?? null;
+      return prev.filter((c) => !(String(c.id) === String(userId) && c.status === 'pending'));
+    });
+
+    // Call backend to permanently delete the row so it doesn't come back on next sync
+    if (BACKEND_INTEGRATION && requestId != null) {
+      const uid = Number(memberKey);
+      if (!Number.isNaN(uid)) {
+        try {
+          await api.connections.withdraw({ request_id: requestId, requester_id: uid });
+        } catch {
+          /* ignore — row may already be gone */
+        }
+      }
+    }
+  }, [api, memberKey]);
 
   const acceptIncomingInvite = useCallback(
     async (inviteId) => {
       const inv = incomingInvitesRef.current.find((i) => i.id === inviteId);
       if (!inv) return;
-      if (BACKEND_INTEGRATION && inv.request_id != null && userRole === 'MEMBER') {
+      if (BACKEND_INTEGRATION && inv.request_id != null && (userRole === 'MEMBER' || userRole === 'RECRUITER')) {
         const rid = Number(memberKey);
         if (!Number.isNaN(rid)) {
           try {
             await api.connections.accept({ request_id: inv.request_id, receiver_id: rid });
           } catch {
-            return;
+            /* fall through — always update local state so UI stays consistent */
           }
         }
       }
+      // Always update local state regardless of backend result
       setIncomingInvites((prev) => prev.filter((i) => i.id !== inviteId));
-      const peerId = inv.requester_id != null ? inv.requester_id : `conn-${inviteId}`;
+      const rawPeerId = inv.requester_id != null ? inv.requester_id : `conn-${inviteId}`;
+      const peerType = inv.requester_type || 'member';
+      const peerId = peerType === 'recruiter' ? `r-${rawPeerId}` : rawPeerId;
       setConnections((c) => [
         ...c.filter((x) => String(x.id) !== String(peerId)),
         {
           id: peerId,
+          rawId: rawPeerId,
+          userType: peerType,
           name: inv.name,
           headline: inv.headline,
           mutual: inv.mutual ?? 0,
@@ -1251,16 +1480,17 @@ export const MockDataProvider = ({ children }) => {
     async (inviteId) => {
       const inv = incomingInvitesRef.current.find((i) => i.id === inviteId);
       if (!inv) return;
-      if (BACKEND_INTEGRATION && inv.request_id != null && userRole === 'MEMBER') {
+      if (BACKEND_INTEGRATION && inv.request_id != null && (userRole === 'MEMBER' || userRole === 'RECRUITER')) {
         const rid = Number(memberKey);
         if (!Number.isNaN(rid)) {
           try {
             await api.connections.reject({ request_id: inv.request_id, receiver_id: rid });
           } catch {
-            return;
+            /* fall through — always update local state */
           }
         }
       }
+      // Always remove from local state regardless of backend result
       setIncomingInvites((prev) => prev.filter((i) => i.id !== inviteId));
     },
     [api, memberKey, userRole],
@@ -1305,6 +1535,7 @@ export const MockDataProvider = ({ children }) => {
     try {
       localStorage.removeItem(savedJobsStorageKey(email));
       localStorage.removeItem(incomingInvitesStorageKey(email));
+      localStorage.removeItem(connectionsStorageKey(email));
       localStorage.removeItem(conversationsStorageKey(email));
       localStorage.removeItem(`linkdln:memberExtraSections:${email}`);
       localStorage.removeItem(memberProfilePhotoKey(email));
@@ -1355,6 +1586,30 @@ export const MockDataProvider = ({ children }) => {
     },
     [api, authToken, userRole, userProfile?.member_id],
   );
+
+  /**
+   * Opens (or reuses) a backend messaging thread with another user.
+   * Stores the peer's display name for inbox rendering.
+   * Returns the backend thread_id (string).
+   */
+  const openConversationWith = useCallback(async (peerId, peerName, peerHeadline = '') => {
+    const key = String(peerId);
+    const myId = String(memberKey || 'me');
+    // Record peer name so Messaging can resolve it
+    setPeerNames((prev) => (prev[key] ? prev : { ...prev, [key]: peerName || 'Member' }));
+    try {
+      const raw = await api.messaging.openThread({
+        participants: [myId, key],
+        subject: peerName || 'Conversation',
+      });
+      const data = (raw?.status === 'success' ? raw.data : raw) ?? raw ?? {};
+      const threadId = data?.thread_id ?? `local-${key}`;
+      return threadId;
+    } catch {
+      // Fallback to local-only thread id so navigation still works
+      return `local-${key}`;
+    }
+  }, [api, memberKey]);
 
   const login = async (
     role,
@@ -1559,12 +1814,16 @@ export const MockDataProvider = ({ children }) => {
         savedJobIds,
         toggleSaveJob,
         isJobSaved,
+        memberKey,
         conversationStore,
         sendMessage,
+        openConversationWith,
+        peerNames,
         clearMemberStoredProfile,
         deleteMemberProfile,
         getRecruiterAnalytics,
         getMemberAnalytics,
+        api,
       }}
     >
       {children}

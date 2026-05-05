@@ -27,7 +27,6 @@ import {
   notifyProfilePhotoUpdated,
 } from '../context/MockDataContext';
 import { makeApi } from '../api';
-import CareerCoachPanel from '../components/CareerCoachPanel';
 
 const EXTRA_SECTIONS_STORAGE = (email) => `linkdln:memberExtraSections:${email || 'me'}`;
 
@@ -115,19 +114,6 @@ const Profile = () => {
   const [editForm, setEditForm] = useState(profile);
   const [showAddSectionModal, setShowAddSectionModal] = useState(false);
 
-  const careerCoachSeedText = useMemo(
-    () =>
-      [
-        profile.headline,
-        profile.about,
-        profile.skills,
-        (profile.experience || []).map((e) => `${e.title} ${e.company}`).join(' '),
-        (profile.education || []).map((e) => `${e.degree} ${e.school}`).join(' '),
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    [profile.headline, profile.about, profile.skills, profile.experience, profile.education]
-  );
 
   const persistExtraSections = useCallback((email, sections) => {
     const key = EXTRA_SECTIONS_STORAGE(email);
@@ -527,16 +513,6 @@ const Profile = () => {
           </div>
         </div>
 
-        <CareerCoachPanel
-          authToken={authToken}
-          userProfile={userProfile}
-          jobs={jobs}
-          showJobPicker
-          seedResumeText={careerCoachSeedText}
-          profileHeadline={profile.headline}
-          profileAbout={profile.about}
-          profileSkills={profile.skills}
-        />
 
         {(profile.extraSections || []).map((sec) => {
           const meta = SECTION_CATALOG.find((c) => c.type === sec.type);

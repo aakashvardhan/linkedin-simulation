@@ -11,10 +11,12 @@ from app.core.kafka import publisher
 from app.core.responses import success_response
 from app.models.connection import Connection
 from app.models.member import Member
+from app.models.recruiter import Recruiter
 from app.schemas.connection import (
     ConnectionActionRequest,
     ConnectionListRequest,
     ConnectionRequestCreate,
+    ConnectionWithdrawRequest,
     MutualConnectionsRequest,
     PendingConnectionsRequest,
 )
@@ -22,19 +24,49 @@ from app.schemas.connection import (
 router = APIRouter()
 
 
-def _connected_member_ids(db: Session, user_id: int) -> set[int]:
+def _lookup_participant(db: Session, user_id: int, user_type: str = 'member') -> dict | None:
+    """Look up a display name from the correct table based on user_type."""
+    if user_type == 'recruiter':
+        recruiter = db.query(Recruiter).filter(Recruiter.recruiter_id == user_id).first()
+        if recruiter:
+            return {'first_name': recruiter.first_name, 'last_name': recruiter.last_name, 'headline': ''}
+        return None
+    member = db.query(Member).filter(Member.member_id == user_id).first()
+    if member:
+        return {'first_name': member.first_name, 'last_name': member.last_name, 'headline': getattr(member, 'headline', '')}
+    return None
+
+
+def _connected_ids(db: Session, user_id: int, user_type: str) -> set[tuple]:
+    """Return set of (other_id, other_type) tuples for accepted connections of this user."""
     rows = (
         db.query(Connection)
         .filter(
             Connection.status == 'accepted',
-            or_(Connection.requester_id == user_id, Connection.receiver_id == user_id),
+            or_(
+                and_(Connection.requester_id == user_id, Connection.requester_type == user_type),
+                and_(Connection.receiver_id == user_id, Connection.receiver_type == user_type),
+            ),
         )
         .all()
     )
-    connected: set[int] = set()
+    connected: set[tuple] = set()
     for row in rows:
-        connected.add(row.receiver_id if row.requester_id == user_id else row.requester_id)
+        if row.requester_id == user_id and row.requester_type == user_type:
+            connected.add((row.receiver_id, row.receiver_type))
+        else:
+            connected.add((row.requester_id, row.requester_type))
     return connected
+
+
+def _auth_check(current_user: dict, expected_user_id: int):
+    """Verify that the JWT user_id matches the expected_user_id."""
+    try:
+        jwt_uid = int(current_user.get('user_id', -1))
+    except (TypeError, ValueError):
+        jwt_uid = -1
+    if jwt_uid != expected_user_id:
+        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
 
 
 @router.post('/connections/request', status_code=status.HTTP_201_CREATED)
@@ -43,22 +75,30 @@ def request_connection(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get('role') != 'member' or int(current_user.get('user_id')) != payload.requester_id:
-        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
-    if payload.requester_id == payload.receiver_id:
+    _auth_check(current_user, payload.requester_id)
+    requester_type = current_user.get('role', 'member')  # 'member' or 'recruiter' from JWT
+    receiver_type = payload.receiver_type  # passed by frontend
+
+    if payload.requester_id == payload.receiver_id and requester_type == receiver_type:
         raise HTTPException(status_code=400, detail='Cannot send connection request to yourself')
 
-    requester = db.query(Member).filter(Member.member_id == payload.requester_id).first()
-    receiver = db.query(Member).filter(Member.member_id == payload.receiver_id).first()
-    if not requester or not receiver:
-        raise HTTPException(status_code=404, detail='Member not found')
+    if _lookup_participant(db, payload.requester_id, requester_type) is None:
+        raise HTTPException(status_code=404, detail='Requester not found')
+    if _lookup_participant(db, payload.receiver_id, receiver_type) is None:
+        raise HTTPException(status_code=404, detail='Receiver not found')
 
     existing = (
         db.query(Connection)
         .filter(
             or_(
-                and_(Connection.requester_id == payload.requester_id, Connection.receiver_id == payload.receiver_id),
-                and_(Connection.requester_id == payload.receiver_id, Connection.receiver_id == payload.requester_id),
+                and_(
+                    Connection.requester_id == payload.requester_id, Connection.requester_type == requester_type,
+                    Connection.receiver_id == payload.receiver_id, Connection.receiver_type == receiver_type,
+                ),
+                and_(
+                    Connection.requester_id == payload.receiver_id, Connection.requester_type == receiver_type,
+                    Connection.receiver_id == payload.requester_id, Connection.receiver_type == requester_type,
+                ),
             )
         )
         .first()
@@ -66,7 +106,11 @@ def request_connection(
     if existing:
         raise HTTPException(status_code=409, detail='Connection request already exists between these users')
 
-    connection = Connection(requester_id=payload.requester_id, receiver_id=payload.receiver_id, status='pending')
+    connection = Connection(
+        requester_id=payload.requester_id, requester_type=requester_type,
+        receiver_id=payload.receiver_id, receiver_type=receiver_type,
+        status='pending',
+    )
     db.add(connection)
     try:
         db.commit()
@@ -99,8 +143,7 @@ def accept_connection(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get('role') != 'member' or int(current_user.get('user_id')) != payload.receiver_id:
-        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
+    _auth_check(current_user, payload.receiver_id)
 
     connection = db.query(Connection).filter(Connection.connection_id == payload.request_id).first()
     if not connection:
@@ -110,14 +153,15 @@ def accept_connection(
     if connection.status != 'pending':
         raise HTTPException(status_code=400, detail='Connection request is not in pending status')
 
-    requester = db.query(Member).filter(Member.member_id == connection.requester_id).first()
-    receiver = db.query(Member).filter(Member.member_id == connection.receiver_id).first()
     connection.status = 'accepted'
     connection.responded_at = datetime.now(timezone.utc)
-    if requester:
-        requester.connections_count += 1
-    if receiver:
-        receiver.connections_count += 1
+    # Increment connections_count only for Member participants
+    requester_member = db.query(Member).filter(Member.member_id == connection.requester_id).first()
+    receiver_member = db.query(Member).filter(Member.member_id == connection.receiver_id).first()
+    if requester_member:
+        requester_member.connections_count += 1
+    if receiver_member:
+        receiver_member.connections_count += 1
     db.commit()
     return success_response(
         {
@@ -135,8 +179,7 @@ def reject_connection(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get('role') != 'member' or int(current_user.get('user_id')) != payload.receiver_id:
-        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
+    _auth_check(current_user, payload.receiver_id)
 
     connection = db.query(Connection).filter(Connection.connection_id == payload.request_id).first()
     if not connection:
@@ -158,16 +201,15 @@ def list_connections(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get('role') != 'member' or int(current_user.get('user_id')) != payload.user_id:
-        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
-
-    user = db.query(Member).filter(Member.member_id == payload.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail='Member not found')
+    _auth_check(current_user, payload.user_id)
+    user_type = current_user.get('role', 'member')
 
     query = db.query(Connection).filter(
         Connection.status == 'accepted',
-        or_(Connection.requester_id == payload.user_id, Connection.receiver_id == payload.user_id),
+        or_(
+            and_(Connection.requester_id == payload.user_id, Connection.requester_type == user_type),
+            and_(Connection.receiver_id == payload.user_id, Connection.receiver_type == user_type),
+        ),
     )
     total_count = query.count()
     page = max(payload.page, 1)
@@ -176,17 +218,21 @@ def list_connections(
 
     connections = []
     for row in rows:
-        other_id = row.receiver_id if row.requester_id == payload.user_id else row.requester_id
-        other = db.query(Member).filter(Member.member_id == other_id).first()
-        if not other:
+        if row.requester_id == payload.user_id and row.requester_type == user_type:
+            other_id, other_type = row.receiver_id, row.receiver_type
+        else:
+            other_id, other_type = row.requester_id, row.requester_type
+        info = _lookup_participant(db, other_id, other_type)
+        if not info:
             continue
         connections.append(
             {
                 'connection_id': row.connection_id,
-                'member_id': other.member_id,
-                'first_name': other.first_name,
-                'last_name': other.last_name,
-                'headline': other.headline,
+                'member_id': other_id,
+                'user_type': other_type,
+                'first_name': info['first_name'],
+                'last_name': info['last_name'],
+                'headline': info['headline'],
                 'connected_at': row.responded_at,
             }
         )
@@ -207,39 +253,106 @@ def pending_connections(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get('role') != 'member' or int(current_user.get('user_id')) != payload.user_id:
-        raise HTTPException(status_code=401, detail='Invalid or expired authentication token')
-    query = db.query(Connection).filter(Connection.receiver_id == payload.user_id, Connection.status == 'pending')
+    _auth_check(current_user, payload.user_id)
+    user_type = current_user.get('role', 'member')
+    query = db.query(Connection).filter(
+        Connection.receiver_id == payload.user_id,
+        Connection.receiver_type == user_type,
+        Connection.status == 'pending',
+    )
     total_count = query.count()
     page = max(payload.page, 1)
     page_size = max(payload.page_size, 1)
     rows = query.order_by(Connection.requested_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     requests = []
     for row in rows:
-        requester = db.query(Member).filter(Member.member_id == row.requester_id).first()
-        if not requester:
+        info = _lookup_participant(db, row.requester_id, row.requester_type)
+        if not info:
             continue
         requests.append(
             {
                 'request_id': row.connection_id,
-                'requester_id': requester.member_id,
-                'first_name': requester.first_name,
-                'last_name': requester.last_name,
-                'headline': requester.headline,
+                'requester_id': row.requester_id,
+                'requester_type': row.requester_type,
+                'first_name': info['first_name'],
+                'last_name': info['last_name'],
+                'headline': info['headline'],
                 'created_at': row.requested_at,
             }
         )
     return success_response({'requests': requests, 'total_count': total_count, 'page': page, 'page_size': page_size})
 
 
+@router.post('/connections/sent')
+def sent_connections(
+    payload: PendingConnectionsRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Outbound pending requests sent by this user (member or recruiter)."""
+    _auth_check(current_user, payload.user_id)
+    user_type = current_user.get('role', 'member')
+    query = db.query(Connection).filter(
+        Connection.requester_id == payload.user_id,
+        Connection.requester_type == user_type,
+        Connection.status == 'pending',
+    )
+    total_count = query.count()
+    page = max(payload.page, 1)
+    page_size = max(payload.page_size, 1)
+    rows = query.order_by(Connection.requested_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    requests = []
+    for row in rows:
+        info = _lookup_participant(db, row.receiver_id, row.receiver_type)
+        if not info:
+            continue
+        requests.append({
+            'request_id': row.connection_id,
+            'receiver_id': row.receiver_id,
+            'receiver_type': row.receiver_type,
+            'first_name': info['first_name'],
+            'last_name': info['last_name'],
+            'headline': info['headline'],
+            'created_at': row.requested_at,
+        })
+    return success_response({'requests': requests, 'total_count': total_count, 'page': page, 'page_size': page_size})
+
+
+@router.post('/connections/withdraw')
+def withdraw_connection(
+    payload: ConnectionWithdrawRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Cancel an outbound pending connection request sent by the current user."""
+    _auth_check(current_user, payload.requester_id)
+    requester_type = current_user.get('role', 'member')
+
+    connection = db.query(Connection).filter(
+        Connection.connection_id == payload.request_id,
+        Connection.requester_id == payload.requester_id,
+        Connection.requester_type == requester_type,
+        Connection.status == 'pending',
+    ).first()
+
+    if not connection:
+        raise HTTPException(status_code=404, detail='Pending connection request not found')
+
+    db.delete(connection)
+    db.commit()
+    return success_response({'request_id': payload.request_id, 'status': 'withdrawn'})
+
+
 @router.post('/connections/mutual')
 def mutual_connections(payload: MutualConnectionsRequest, db: Session = Depends(get_db)):
-    first = db.query(Member).filter(Member.member_id == payload.user_id).first()
-    second = db.query(Member).filter(Member.member_id == payload.other_id).first()
-    if not first or not second:
-        raise HTTPException(status_code=404, detail='Member not found')
-    mutual_ids = _connected_member_ids(db, payload.user_id).intersection(_connected_member_ids(db, payload.other_id))
-    mutual_people = db.query(Member).filter(Member.member_id.in_(mutual_ids)).all() if mutual_ids else []
+    # Try both types for a best-effort lookup without requiring type info in this endpoint
+    user_type = 'member'
+    other_type = 'member'
+    mutual_pairs = _connected_ids(db, payload.user_id, user_type).intersection(
+        _connected_ids(db, payload.other_id, other_type)
+    )
+    member_ids = {pid for pid, ptype in mutual_pairs if ptype == 'member'}
+    mutual_people = db.query(Member).filter(Member.member_id.in_(member_ids)).all() if member_ids else []
     return success_response(
         {
             'mutual_connections': [
