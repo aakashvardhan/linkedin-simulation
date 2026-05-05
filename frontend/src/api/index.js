@@ -82,6 +82,17 @@ export function makeApi({ getAuthToken } = {}) {
       candidateMatch: (payload) => api.post('/ai/candidate-match', payload),
       careerCoach: (payload) => api.post('/ai/career-coach', payload),
     },
+    /** Recruiter hiring copilot (`services/recruiter-ai-service`) — proxied as `/api/agent/*` through the gateway. */
+    recruiterAgent: {
+      request: (payload) =>
+        api.post('/agent/request', payload, { timeoutMs: 60000 }),
+      status: (traceId) =>
+        api.get(`/agent/status/${encodeURIComponent(traceId)}`, { timeoutMs: 30000 }),
+      result: (traceId) =>
+        api.get(`/agent/result/${encodeURIComponent(traceId)}`, { timeoutMs: 60000 }),
+      approve: (traceId, payload) =>
+        api.post(`/agent/approve/${encodeURIComponent(traceId)}`, payload, { timeoutMs: 30000 }),
+    },
   };
 }
 

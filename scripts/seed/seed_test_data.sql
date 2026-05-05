@@ -15,22 +15,23 @@ INSERT IGNORE INTO companies (company_id, name, industry, size)
 VALUES (1, 'Test Corp', 'Technology', '51-200');
 
 -- ─── Members (IDs 1 and 2 — used by test_e2e.js) ─────────────────────────────
--- password_hash is a bcrypt placeholder — fine for testing
+-- Plaintext password for both: Member123!  (bcrypt via backend hash_password)
 INSERT IGNORE INTO members
   (member_id, first_name, last_name, email, password_hash, phone,
    location_city, location_state, location_country)
 VALUES
-  (1, 'Alice', 'Applicant', 'alice@test.com', '$2b$12$bCRYgThcjbfPDIP.8H1o5uvlmjZTjIuyfqeBhptu1htlNiuaaYnyu', '555-0001',
+  (1, 'Alice', 'Applicant', 'alice@test.com', '$2b$12$KQEmKmuGMD2Cy0CVD4p7COuSq5NEVNIiaIIq268dm33FZVblP165e', '555-0001',
    'San Jose', 'CA', 'USA'),
-  (2, 'Bob',   'Applicant', 'bob@test.com',   '$2b$12$bCRYgThcjbfPDIP.8H1o5uvlmjZTjIuyfqeBhptu1htlNiuaaYnyu',   '555-0002',
+  (2, 'Bob',   'Applicant', 'bob@test.com',   '$2b$12$KQEmKmuGMD2Cy0CVD4p7COuSq5NEVNIiaIIq268dm33FZVblP165e',   '555-0002',
    'San Jose', 'CA', 'USA');
 
 -- ─── Recruiters (IDs 1 and 2 — used by test_e2e.js) ──────────────────────────
+-- Plaintext password for both: Recruiter123!  (bcrypt via backend hash_password)
 INSERT IGNORE INTO recruiters
   (recruiter_id, company_id, first_name, last_name, email, password_hash, role)
 VALUES
-  (1, 1, 'Carol', 'Recruiter', 'carol@testcorp.com', '$2b$12$bCRYgThcjbfPDIP.8H1o5uvlmjZTjIuyfqeBhptu1htlNiuaaYnyu', 'recruiter'),
-  (2, 1, 'Dave',  'Recruiter', 'dave@testcorp.com',  '$2b$12$bCRYgThcjbfPDIP.8H1o5uvlmjZTjIuyfqeBhptu1htlNiuaaYnyu',  'recruiter');
+  (1, 1, 'Carol', 'Recruiter', 'carol@testcorp.com', '$2b$12$QL9i9kDj3g9da9ORkshCDu4UCnsN4tmNE/3ILmsiIctbzRtMT0ki6', 'recruiter'),
+  (2, 1, 'Dave',  'Recruiter', 'dave@testcorp.com',  '$2b$12$QL9i9kDj3g9da9ORkshCDu4UCnsN4tmNE/3ILmsiIctbzRtMT0ki6',  'recruiter');
 
 -- ─── Job Postings ─────────────────────────────────────────────────────────────
 -- job_id=1 → status='open'   (used by submit, byJob, duplicate, byMember tests)

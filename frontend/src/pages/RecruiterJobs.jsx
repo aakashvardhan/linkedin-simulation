@@ -1,10 +1,80 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useMockData } from '../context/MockDataContext';
-import { APPLICATION_STATUSES, generateCandidateMatches } from '../data/mockApplicants';
+import {
+  APPLICATION_STATUSES,
+  generateApplicantsForJob,
+  generateCandidateMatches,
+} from '../data/mockApplicants';
+import { makeApi } from '../api';
 import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope } from 'react-icons/fa';
 
+/**
+ * Candidates are processed one-by-one (parse → match → explain → interview → outreach).
+ * Default 3 for responsive UI; set `VITE_AI_CANDIDATE_BATCH=8` in `.env` if you want a larger batch.
+ */
+const AI_CANDIDATE_BATCH_LIMIT = Math.min(
+  12,
+  Math.max(1, Number(import.meta.env.VITE_AI_CANDIDATE_BATCH) || 3),
+);
+const AGENT_POLL_MS = 2500;
+/** Each candidate runs parse → match → explain → interview → outreach (often 30–120s+). */
+const AGENT_MAX_POLLS = 480;
+
+const AGENT_STEP_LABELS = {
+  resume_parsed: 'Resume parsed',
+  match_scored: 'Match scored',
+  ranking_explained: 'Ranking explained',
+  interview_questions_generated: 'Interview questions',
+  outreach_drafted: 'Outreach drafted',
+  candidates_ranked: 'Final ranking',
+};
+
+/** Uses `steps` from GET /agent/result so the UI is not blind until the first match_scored. */
+function pipelineHintFromAgentResult(data) {
+  const steps = data?.steps;
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return 'Waiting for worker — if this persists, check ai-service is consuming Kafka topic ai.requests.';
+  }
+  const last = steps[steps.length - 1];
+  const step = last?.step;
+  const status = last?.status;
+  const d = last?.data && typeof last.data === 'object' ? last.data : {};
+  const cid = d.candidate_id != null ? String(d.candidate_id).slice(0, 28) : '';
+  const lbl = AGENT_STEP_LABELS[step] || step || 'step';
+  const who = cid ? ` · ${cid}` : '';
+  if (status === 'failed') {
+    const err = typeof last?.error === 'string' ? last.error : 'see ai-service / skill logs';
+    return `${lbl} failed${who} — ${err}`;
+  }
+  return `${lbl}: ${status}${who}`;
+}
+
+function mapAgentRankedRowToUi(row, applicantById) {
+  const cid = String(row.candidate_id ?? '');
+  const app = applicantById[cid] || {};
+  const score =
+    typeof row.score_pct === 'number'
+      ? row.score_pct
+      : Math.min(100, Math.round(Number(row.match_score || 0) * 100));
+  const overlap = Array.isArray(row.skills_overlap) ? row.skills_overlap : [];
+  const draft = row?.outreach?.draft || '';
+  return {
+    candidateId: cid,
+    name: app.name || 'Candidate',
+    email: app.email || '',
+    headline: app.headline || '',
+    matchScore: score,
+    matchedSkills: overlap.length ? overlap : ['—'],
+    emailDraft: draft,
+    humanEvaluation: [],
+    _rankingExplanation: row.ranking_explanation,
+    _interviewQuestions: row.interview_questions,
+  };
+}
+
 const RecruiterJobs = () => {
-  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus, userProfile } = useMockData();
+  const { jobs, addJob, editJob, deleteJob, applicantsByJobId, updateApplicantStatus, userProfile, authToken } = useMockData();
+  const api = useMemo(() => makeApi({ getAuthToken: () => authToken }), [authToken]);
   const [newJob, setNewJob] = useState({
     title: '',
     company: 'My Startup',
@@ -30,6 +100,17 @@ const RecruiterJobs = () => {
   const [applicantsModalJob, setApplicantsModalJob] = useState(null);
   const [applicantSearch, setApplicantSearch] = useState('');
   const [resumeViewerApplicant, setResumeViewerApplicant] = useState(null);
+  /** Set when the latest “Find candidates” run used `recruiter-ai-service` (for approval API). */
+  const [agentTraceId, setAgentTraceId] = useState(null);
+  /** `recruiter_ai` = ranked payload from `/agent/result`; `offline` = explicit local demo only. */
+  const [copilotSource, setCopilotSource] = useState(null);
+  /** Partial `ranked_candidates_preview` rows from the assistant while the pipeline is still running. */
+  const [rankedPreviewRows, setRankedPreviewRows] = useState([]);
+  /** Applicant map for the active “Find candidates” run (synthetic or API-backed). */
+  const [copilotApplicantById, setCopilotApplicantById] = useState({});
+  const [expandedInsightsId, setExpandedInsightsId] = useState(null);
+  const [showOfflineFallback, setShowOfflineFallback] = useState(false);
+  const offlineFallbackRef = useRef(null);
 
   const applicantsForModal = useMemo(() => {
     if (!applicantsModalJob) return [];
@@ -94,20 +175,182 @@ const RecruiterJobs = () => {
     });
   }, [jobs, search, industryFilter]);
 
-  /** Rank current applicants locally (replace with real AI service when available). */
-  const triggerCandidateMatching = (job) => {
-    setSelectedJobForMatching(job);
-    setMatchedCandidates([]);
-    setExpandedCandidateId(null);
-    setEditedEmails({});
-    const applicants = applicantsByJobId[String(job.id)] ?? [];
-    setCopilotState('matching');
-    setCopilotLog([`Ranking ${applicants.length} applicant(s) for “${job.title}”…`]);
-    const result = generateCandidateMatches(job, applicants, userProfile?.displayName || 'Recruiter');
+  const triggerCandidateMatching = useCallback(
+    async (job) => {
+      setSelectedJobForMatching(job);
+      setMatchedCandidates([]);
+      setExpandedCandidateId(null);
+      setEditedEmails({});
+      setAgentTraceId(null);
+      setCopilotSource(null);
+      setRankedPreviewRows([]);
+      setCopilotApplicantById({});
+      setExpandedInsightsId(null);
+      setShowOfflineFallback(false);
+      offlineFallbackRef.current = null;
+
+      const fromContext = applicantsByJobId[String(job.id)] ?? [];
+      const demoSeedOn = import.meta.env.VITE_DEMO_SEED !== 'false';
+      const listed = Number(job.applicants) || 0;
+      const syntheticCount =
+        demoSeedOn && fromContext.length === 0
+          ? listed > 0
+            ? Math.min(listed, 100)
+            : 12
+          : 0;
+      const synthetic =
+        syntheticCount > 0 ? generateApplicantsForJob(job.id, syntheticCount) : [];
+      const applicants = fromContext.length > 0 ? fromContext : synthetic;
+      const applicantById = Object.fromEntries(applicants.map((a) => [String(a.id), a]));
+      setCopilotApplicantById(applicantById);
+
+      if (applicants.length === 0) {
+        setCopilotState('idle');
+        setCopilotLog([
+          `No applicant rows loaded for “${job.title}”.`,
+          listed > 0
+            ? 'The job shows an applicant count, but /applications/byJob returned none. Open “View Applicants”; if empty, turn on demo seed (VITE_DEMO_SEED) or submit real applications.'
+            : 'Post the role and have members apply, or use demo seeding so synthetic applicants exist.',
+        ]);
+        return;
+      }
+
+      setCopilotState('matching');
+      const batch = applicants.slice(0, AI_CANDIDATE_BATCH_LIMIT);
+      setCopilotLog([
+        `Calling recruiter assistant (/agent/request → recruiter-ai-service)…`,
+        synthetic.length
+          ? `Using ${batch.length} synthetic demo applicant(s) for “${job.title}” (${listed ? `card ${listed}; ` : ''}no rows from /applications/byJob).`
+          : `Batch: ${batch.length} of ${applicants.length} applicant(s) for “${job.title}”.`,
+      ]);
+
+      const jobPayload = {
+        id: job.id,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        industry: job.industry || '',
+        description: job.description || '',
+        type: job.type || 'Full-time',
+        remote: Boolean(job.remote),
+      };
+
+      const candidates = batch.map((a) => ({
+        candidate_id: String(a.id),
+        resume_text: (a.resumeSummary || `${a.name}\n${a.headline}`).trim() || `${a.name}`,
+      }));
+
+      const actorId =
+        userProfile?.recruiter_id != null
+          ? String(userProfile.recruiter_id)
+          : String(userProfile?.email || userProfile?.member_id || 'recruiter');
+
+      try {
+        const queued = await api.recruiterAgent.request({
+          actor_id: actorId,
+          job: jobPayload,
+          candidates,
+        });
+        const traceId = queued?.trace_id;
+        if (!traceId) throw new Error('Agent did not return trace_id');
+        setAgentTraceId(traceId);
+        setCopilotLog((prev) => [
+          ...prev,
+          `Workflow started (trace ${traceId}). Polling for results…`,
+          `Processing up to ${batch.length} candidate(s) sequentially; first step updates can take 1–4 min (cold skill containers).`,
+        ]);
+
+        const terminalStatus = (s) =>
+          s === 'awaiting_approval' || s === 'approved' || s === 'edited' || s === 'rejected';
+
+        let ranked = undefined;
+        let lastPipelineHint = '';
+        for (let i = 0; i < AGENT_MAX_POLLS; i += 1) {
+          await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
+          const data = await api.recruiterAgent.result(traceId);
+          const st = data?.trace?.status;
+          if (st === 'failed' || st === 'error') {
+            throw new Error(data?.trace?.last_error || data?.trace?.error || 'Recruiter AI pipeline failed');
+          }
+          const list = Array.isArray(data?.ranked_candidates) ? data.ranked_candidates : [];
+          const preview = data?.ranked_candidates_preview;
+          if (Array.isArray(preview) && preview.length > 0) {
+            setRankedPreviewRows(preview);
+          }
+          if (terminalStatus(st)) {
+            ranked = list;
+            break;
+          }
+          const hint = pipelineHintFromAgentResult(data);
+          if (hint && hint !== lastPipelineHint) {
+            lastPipelineHint = hint;
+            setCopilotLog((prev) => [...prev, hint]);
+          } else if (i > 0 && i % 6 === 0) {
+            const scored = data?.stats_preview?.candidates_scored;
+            const extra =
+              typeof scored === 'number' && scored > 0 ? ` · scored: ${scored}/${batch.length}` : '';
+            setCopilotLog((prev) => [...prev, `…still in progress (${st || 'in_progress'})${extra}`]);
+          }
+        }
+
+        if (ranked === undefined) {
+          throw new Error(
+            `Timed out after ~${Math.round((AGENT_MAX_POLLS * AGENT_POLL_MS) / 60000)} min (pipeline still in progress). Try fewer candidates or check recruiter-ai / skill container logs.`,
+          );
+        }
+
+        setRankedPreviewRows([]);
+        setCopilotSource('recruiter_ai');
+
+        if (ranked.length === 0) {
+          setMatchedCandidates([]);
+          setCopilotLog((prev) => [
+            ...prev,
+            'Recruiter assistant finished with no ranked candidates (check skill services / logs if every step failed).',
+          ]);
+          setCopilotState('results');
+        } else {
+          setMatchedCandidates(ranked.map((row) => mapAgentRankedRowToUi(row, applicantById)));
+          setCopilotLog((prev) => [
+            ...prev,
+            `✓ Recruiter assistant returned ${ranked.length} ranked candidate(s) (outreach + explanations in cards).`,
+          ]);
+          setCopilotState('results');
+        }
+      } catch (e) {
+        const msg = e?.message || String(e);
+        setRankedPreviewRows([]);
+        setAgentTraceId(null);
+        setCopilotSource(null);
+        offlineFallbackRef.current = { job, applicants };
+        setCopilotState('idle');
+        setCopilotLog((prev) => [
+          ...prev,
+          `Recruiter assistant could not complete: ${msg}`,
+          'Check Docker logs for ai-service and skill containers (resume-parser, matcher, …). Optional: run offline demo ranking below (local rules, not the assistant).',
+        ]);
+        setShowOfflineFallback(true);
+      }
+    },
+    [api, applicantsByJobId, userProfile],
+  );
+
+  const runOfflineDemoRanking = useCallback(() => {
+    const ctx = offlineFallbackRef.current;
+    if (!ctx) return;
+    const { job: j, applicants: apps } = ctx;
+    const result = generateCandidateMatches(j, apps, userProfile?.displayName || 'Recruiter');
     setMatchedCandidates(result.candidates);
-    setCopilotLog((prev) => [...prev, `Done — ${result.candidates.length} candidate(s) ranked.`]);
+    setCopilotLog(['Ranked using local demo rules only (not the recruiter assistant).']);
+    setCopilotSource('offline');
+    setShowOfflineFallback(false);
     setCopilotState('results');
-  };
+    setAgentTraceId(null);
+    setSelectedJobForMatching(j);
+    setRankedPreviewRows([]);
+    setExpandedInsightsId(null);
+    setCopilotApplicantById(Object.fromEntries(apps.map((a) => [String(a.id), a])));
+  }, [userProfile?.displayName]);
 
   const resetCopilot = () => {
     setCopilotState('idle');
@@ -116,6 +359,13 @@ const RecruiterJobs = () => {
     setMatchedCandidates([]);
     setExpandedCandidateId(null);
     setEditedEmails({});
+    setAgentTraceId(null);
+    setCopilotSource(null);
+    setRankedPreviewRows([]);
+    setCopilotApplicantById({});
+    setExpandedInsightsId(null);
+    setShowOfflineFallback(false);
+    offlineFallbackRef.current = null;
   };
 
   const STATUS_COLORS = { verified: '#004182', needs_review: '#c37d16', flagged: '#cc0000' };
@@ -281,12 +531,51 @@ const RecruiterJobs = () => {
 
          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', flex: 1 }}>
 
-            {copilotState === 'idle' && (
+            {copilotState === 'idle' && copilotLog.length === 0 && (
               <div style={{ textAlign: 'center', padding: '24px 8px', color: '#666' }}>
                 <FaRobot size={32} style={{ color: '#0A66C2', marginBottom: '12px' }} />
                 <p style={{ fontSize: '14px', lineHeight: '1.5' }}>
-                  Click <strong>&ldquo;Find Candidates&rdquo;</strong> on any job posting to discover top-matched candidates with personalized outreach drafts.
+                  Click <strong>&ldquo;Find Candidates&rdquo;</strong> to run the integrated <strong>recruiter assistant</strong> (recruiter-ai-service): ranked matches, outreach drafts, and interview ideas from the live pipeline.
                 </p>
+              </div>
+            )}
+
+            {copilotState === 'idle' && copilotLog.length > 0 && (
+              <div
+                style={{
+                  backgroundColor: '#fff8f0',
+                  border: '1px solid #e0c4a8',
+                  borderRadius: '8px',
+                  padding: '14px',
+                  fontSize: '13px',
+                  lineHeight: 1.45,
+                  color: '#333',
+                }}
+              >
+                <p style={{ margin: '0 0 8px', fontWeight: 600, color: '#804a00' }}>Copilot</p>
+                {copilotLog.map((line, i) => (
+                  <p key={i} style={{ margin: '0 0 6px' }}>
+                    {line}
+                  </p>
+                ))}
+                {showOfflineFallback && (
+                  <button
+                    type="button"
+                    onClick={runOfflineDemoRanking}
+                    style={{
+                      marginTop: '10px',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #ccc',
+                      background: '#fff',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Run offline demo ranking (not the assistant)
+                  </button>
+                )}
               </div>
             )}
 
@@ -307,16 +596,70 @@ const RecruiterJobs = () => {
               </div>
             )}
 
+            {copilotState === 'matching' && rankedPreviewRows.length > 0 && (
+              <div
+                style={{
+                  border: '1px solid #b4d4f5',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  background: '#f5f9ff',
+                }}
+              >
+                <p style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: 700, color: '#004182' }}>
+                  Recruiter assistant — live partial rankings
+                </p>
+                <p style={{ margin: '0 0 10px', fontSize: '11px', color: '#555' }}>
+                  Scores from the service while outreach steps finish for remaining candidates.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                  {rankedPreviewRows.map((row) => {
+                    const c = mapAgentRankedRowToUi(row, copilotApplicantById);
+                    return (
+                      <div
+                        key={c.candidateId}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '12px',
+                          padding: '6px 8px',
+                          background: '#fff',
+                          borderRadius: '6px',
+                          border: '1px solid #e0e0df',
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, color: '#000000e6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                          {c.name}
+                        </span>
+                        <span style={{ color: '#004182', fontWeight: 700, marginLeft: '8px', flexShrink: 0 }}>{c.matchScore}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {copilotState === 'results' && matchedCandidates.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <h3 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>
                       {matchedCandidates.length} Candidates Matched
                     </h3>
                     <p style={{ fontSize: '12px', color: '#666', margin: '2px 0 0' }}>{selectedJobForMatching?.title}</p>
+                    {copilotSource === 'recruiter_ai' && (
+                      <p style={{ fontSize: '11px', color: '#057642', margin: '8px 0 0', fontWeight: 600 }}>
+                        From recruiter assistant
+                        {agentTraceId ? ` · trace …${agentTraceId.slice(-8)}` : ''}
+                      </p>
+                    )}
+                    {copilotSource === 'offline' && (
+                      <p style={{ fontSize: '11px', color: '#804a00', margin: '8px 0 0', fontWeight: 600 }}>
+                        Offline demo ranking (local rules, not the AI service)
+                      </p>
+                    )}
                   </div>
-                  <button onClick={resetCopilot} style={{ fontSize: '12px', color: '#0A66C2', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+                  <button onClick={resetCopilot} style={{ fontSize: '12px', color: '#0A66C2', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}>
                     New Search
                   </button>
                 </div>
@@ -347,6 +690,99 @@ const RecruiterJobs = () => {
                         ))}
                       </div>
 
+                      {copilotSource === 'recruiter_ai' &&
+                        (Boolean(c._rankingExplanation?.explanation) ||
+                          Boolean(c._rankingExplanation?.error) ||
+                          Boolean(c._interviewQuestions?.error) ||
+                          (Array.isArray(c._interviewQuestions?.technical_questions) &&
+                            c._interviewQuestions.technical_questions.length > 0) ||
+                          (Array.isArray(c._interviewQuestions?.behavioral_questions) &&
+                            c._interviewQuestions.behavioral_questions.length > 0)) && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedInsightsId(expandedInsightsId === c.candidateId ? null : c.candidateId)
+                            }
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: 'none',
+                              border: 'none',
+                              color: '#004182',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              cursor: 'pointer',
+                              padding: '4px 0',
+                              width: '100%',
+                              marginBottom: '4px',
+                            }}
+                          >
+                            Assistant insights
+                            {expandedInsightsId === c.candidateId ? (
+                              <FaChevronUp size={10} style={{ marginLeft: 'auto' }} />
+                            ) : (
+                              <FaChevronDown size={10} style={{ marginLeft: 'auto' }} />
+                            )}
+                          </button>
+                          {expandedInsightsId === c.candidateId && (
+                            <div
+                              style={{
+                                marginBottom: '10px',
+                                padding: '10px',
+                                background: '#f8fafc',
+                                borderRadius: '6px',
+                                border: '1px solid #e5e7eb',
+                                fontSize: '12px',
+                                lineHeight: 1.45,
+                                color: '#333',
+                              }}
+                            >
+                              {typeof c._rankingExplanation?.explanation === 'string' &&
+                                c._rankingExplanation.explanation.trim() !== '' && (
+                                  <p style={{ margin: '0 0 10px' }}>
+                                    <span style={{ fontWeight: 700, color: '#004182' }}>Why this rank: </span>
+                                    {c._rankingExplanation.explanation}
+                                  </p>
+                                )}
+                              {c._rankingExplanation?.error && (
+                                <p style={{ margin: '0 0 8px', color: '#804a00' }}>Ranking note: {c._rankingExplanation.error}</p>
+                              )}
+                              {Array.isArray(c._interviewQuestions?.technical_questions) &&
+                                c._interviewQuestions.technical_questions.length > 0 && (
+                                  <div style={{ marginBottom: '8px' }}>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, color: '#004182' }}>Technical interview ideas</p>
+                                    <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                                      {c._interviewQuestions.technical_questions.slice(0, 4).map((q, qi) => (
+                                        <li key={qi} style={{ marginBottom: '2px' }}>
+                                          {typeof q === 'string' ? q : q?.question || JSON.stringify(q)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              {Array.isArray(c._interviewQuestions?.behavioral_questions) &&
+                                c._interviewQuestions.behavioral_questions.length > 0 && (
+                                  <div>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, color: '#004182' }}>Behavioral interview ideas</p>
+                                    <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                                      {c._interviewQuestions.behavioral_questions.slice(0, 3).map((q, qi) => (
+                                        <li key={qi} style={{ marginBottom: '2px' }}>
+                                          {typeof q === 'string' ? q : q?.question || JSON.stringify(q)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              {c._interviewQuestions?.error && (
+                                <p style={{ margin: '8px 0 0', color: '#804a00' }}>Interview Q note: {c._interviewQuestions.error}</p>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+
                       {/* Email draft toggle */}
                       <button
                         onClick={() => setExpandedCandidateId(isExpanded ? null : c.candidateId)}
@@ -372,6 +808,24 @@ const RecruiterJobs = () => {
                               <FaCopy size={10} /> Copy
                             </button>
                             <button
+                              type="button"
+                              onClick={async () => {
+                                if (!agentTraceId || copilotSource !== 'recruiter_ai') {
+                                  window.alert(
+                                    'Send/approve is only available for rankings returned by the recruiter assistant.',
+                                  );
+                                  return;
+                                }
+                                try {
+                                  await api.recruiterAgent.approve(agentTraceId, {
+                                    action: 'approve',
+                                    candidate_id: String(c.candidateId),
+                                  });
+                                  window.alert('Outreach approval recorded for this candidate.');
+                                } catch (err) {
+                                  window.alert(err?.message || 'Could not record approval');
+                                }
+                              }}
                               style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#fff', background: '#004182', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', marginLeft: 'auto' }}
                             >
                               <FaPaperPlane size={10} /> Send
@@ -380,22 +834,81 @@ const RecruiterJobs = () => {
                         </div>
                       )}
 
-                      {/* Human Evaluation */}
-                      <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
-                        <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Human Evaluation Required</p>
-                        {c.humanEvaluation.map((ev) => (
-                          <div key={ev.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: '12px' }}>
-                            <span style={{ color: '#333' }}>{ev.key}</span>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#555' }}>
-                              {ev.value}
-                              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: STATUS_COLORS[ev.status] || '#999', display: 'inline-block', flexShrink: 0 }} />
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+                      {/* Human Evaluation (mock pipeline only) */}
+                      {Array.isArray(c.humanEvaluation) && c.humanEvaluation.length > 0 && (
+                        <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
+                          <p style={{ fontSize: '11px', fontWeight: '600', color: '#555', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Human Evaluation Required</p>
+                          {c.humanEvaluation.map((ev) => (
+                            <div key={ev.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: '12px' }}>
+                              <span style={{ color: '#333' }}>{ev.key}</span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#555' }}>
+                                {ev.value}
+                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: STATUS_COLORS[ev.status] || '#999', display: 'inline-block', flexShrink: 0 }} />
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {copilotState === 'results' && matchedCandidates.length === 0 && (
+              <div
+                style={{
+                  backgroundColor: '#f3f2ef',
+                  border: '1px solid #e0e0df',
+                  borderRadius: '8px',
+                  padding: '14px',
+                  fontSize: '13px',
+                  color: '#333',
+                }}
+              >
+                <p style={{ margin: '0 0 8px', fontWeight: 600 }}>No candidates to show</p>
+                <p style={{ margin: 0, lineHeight: 1.45 }}>
+                  {copilotSource === 'recruiter_ai'
+                    ? 'The recruiter assistant completed but returned no ranked rows (every candidate may have failed resume, match, or outreach steps). Check ai-service and skill container logs.'
+                    : 'Ranking finished but returned an empty list. Confirm the AI service is running and reachable from the gateway, then try again.'}
+                </p>
+                {copilotLog.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: '10px',
+                      padding: '8px',
+                      background: '#fff',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontFamily: 'monospace',
+                      color: '#444',
+                      maxHeight: '120px',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {copilotLog.map((line, i) => (
+                      <div key={i} style={{ marginBottom: '4px' }}>
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={resetCopilot}
+                  style={{
+                    marginTop: '12px',
+                    fontSize: '12px',
+                    color: '#0A66C2',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    padding: 0,
+                  }}
+                >
+                  New Search
+                </button>
               </div>
             )}
 

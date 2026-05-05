@@ -1,5 +1,12 @@
 const DEFAULT_TIMEOUT_MS = 15000;
 
+/** Same-origin `/api` in production (Docker `client` + nginx gateway); local dev defaults to FastAPI on 8000. */
+function defaultApiBaseUrl() {
+  const raw = import.meta.env.VITE_API_BASE_URL;
+  if (raw != null && String(raw).trim() !== '') return String(raw).trim();
+  return import.meta.env.PROD ? '/api' : 'http://127.0.0.1:8000';
+}
+
 export class ApiError extends Error {
   constructor(message, { status, code, details } = {}) {
     super(message);
@@ -11,7 +18,7 @@ export class ApiError extends Error {
 }
 
 export function createApiClient({
-  baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
+  baseUrl = defaultApiBaseUrl(),
   getAuthToken,
 } = {}) {
   async function request(path, { method = 'GET', body, headers, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
