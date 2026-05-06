@@ -188,6 +188,24 @@ const Profile = () => {
       location_city: next.location.split(',')[0]?.trim(),
       first_name: next.firstName,
       last_name: next.lastName,
+      experience: (next.experience || []).map((e) => ({
+        id: e.id,
+        title: e.title,
+        company: e.company,
+        description: e.description,
+        start_date: e.start_date || e.duration?.split('–')[0]?.trim() || '',
+        end_date: e.end_date || e.duration?.split('–')[1]?.trim() || '',
+        duration: e.duration,
+      })),
+      education: (next.education || []).map((e) => ({
+        id: e.id,
+        school: e.school,
+        degree: e.degree,
+        field: e.field,
+        start_year: e.year?.split('–')[0]?.trim() || e.year || '',
+        end_year: e.year?.split('–')[1]?.trim() || '',
+        year: e.year,
+      })),
     });
     notifyProfilePhotoUpdated();
     setIsEditing(false);
@@ -853,7 +871,101 @@ const Profile = () => {
                   Skills List (Comma separated)
                   <input type="text" value={editForm.skills} onChange={e => setEditForm({...editForm, skills: e.target.value})} style={{ padding: '8px', border: '1px solid #000000e6', borderRadius: '4px', fontSize: '14px' }} />
                </label>
-               
+
+               {/* ── Experience ── */}
+               <div style={{ borderTop: '1px solid #e0e0df', paddingTop: '16px' }}>
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                   <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Experience</h3>
+                   <button
+                     type="button"
+                     onClick={() => setEditForm(f => ({
+                       ...f,
+                       experience: [...(f.experience || []), { id: `exp-${Date.now()}`, title: '', company: '', duration: '', description: '' }]
+                     }))}
+                     style={{ fontSize: '13px', color: '#0A66C2', fontWeight: 600, border: '1px solid #0A66C2', borderRadius: '16px', padding: '4px 12px', background: 'none', cursor: 'pointer' }}
+                   >+ Add</button>
+                 </div>
+                 {(editForm.experience || []).map((exp, idx) => (
+                   <div key={exp.id} style={{ border: '1px solid #e0e0df', borderRadius: '8px', padding: '12px', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                       <span style={{ fontSize: '13px', color: '#666', fontWeight: 600 }}>Entry {idx + 1}</span>
+                       <button type="button" onClick={() => setEditForm(f => ({ ...f, experience: f.experience.filter(e => e.id !== exp.id) }))}
+                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cc0000', fontSize: '13px' }}>Remove</button>
+                     </div>
+                     <div style={{ display: 'flex', gap: '8px' }}>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         Job Title
+                         <input type="text" value={exp.title} onChange={e => setEditForm(f => ({ ...f, experience: f.experience.map(x => x.id === exp.id ? { ...x, title: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         Company
+                         <input type="text" value={exp.company} onChange={e => setEditForm(f => ({ ...f, experience: f.experience.map(x => x.id === exp.id ? { ...x, company: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                     </div>
+                     <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                       Duration (e.g. Jan 2022 – Present)
+                       <input type="text" value={exp.duration} onChange={e => setEditForm(f => ({ ...f, experience: f.experience.map(x => x.id === exp.id ? { ...x, duration: e.target.value } : x) }))}
+                         style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                     </label>
+                     <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                       Description
+                       <textarea value={exp.description || ''} onChange={e => setEditForm(f => ({ ...f, experience: f.experience.map(x => x.id === exp.id ? { ...x, description: e.target.value } : x) }))}
+                         rows={2} style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }} />
+                     </label>
+                   </div>
+                 ))}
+               </div>
+
+               {/* ── Education ── */}
+               <div style={{ borderTop: '1px solid #e0e0df', paddingTop: '16px' }}>
+                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                   <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Education</h3>
+                   <button
+                     type="button"
+                     onClick={() => setEditForm(f => ({
+                       ...f,
+                       education: [...(f.education || []), { id: `edu-${Date.now()}`, school: '', degree: '', field: '', year: '' }]
+                     }))}
+                     style={{ fontSize: '13px', color: '#0A66C2', fontWeight: 600, border: '1px solid #0A66C2', borderRadius: '16px', padding: '4px 12px', background: 'none', cursor: 'pointer' }}
+                   >+ Add</button>
+                 </div>
+                 {(editForm.education || []).map((edu, idx) => (
+                   <div key={edu.id} style={{ border: '1px solid #e0e0df', borderRadius: '8px', padding: '12px', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                       <span style={{ fontSize: '13px', color: '#666', fontWeight: 600 }}>Entry {idx + 1}</span>
+                       <button type="button" onClick={() => setEditForm(f => ({ ...f, education: f.education.filter(e => e.id !== edu.id) }))}
+                         style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cc0000', fontSize: '13px' }}>Remove</button>
+                     </div>
+                     <div style={{ display: 'flex', gap: '8px' }}>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         School / University
+                         <input type="text" value={edu.school} onChange={e => setEditForm(f => ({ ...f, education: f.education.map(x => x.id === edu.id ? { ...x, school: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         Degree
+                         <input type="text" value={edu.degree} onChange={e => setEditForm(f => ({ ...f, education: f.education.map(x => x.id === edu.id ? { ...x, degree: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                     </div>
+                     <div style={{ display: 'flex', gap: '8px' }}>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         Field of Study
+                         <input type="text" value={edu.field || ''} onChange={e => setEditForm(f => ({ ...f, education: f.education.map(x => x.id === edu.id ? { ...x, field: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                       <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px', color: '#666' }}>
+                         Years (e.g. 2018 – 2022)
+                         <input type="text" value={edu.year || ''} onChange={e => setEditForm(f => ({ ...f, education: f.education.map(x => x.id === edu.id ? { ...x, year: e.target.value } : x) }))}
+                           style={{ padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} />
+                       </label>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+
                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '14px', color: '#666' }}>
                     Profile photo (upload)

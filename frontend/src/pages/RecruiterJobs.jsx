@@ -7,7 +7,7 @@ import {
   generateCandidateMatches,
 } from '../data/mockApplicants';
 import { mapAgentResultToCopilotCandidates, pollRecruiterResult } from '../utils/recruiterAssistant';
-import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope, FaListUl } from 'react-icons/fa';
+import { FaTrash, FaEdit, FaSearch, FaRobot, FaSpinner, FaPaperPlane, FaTimes, FaUser, FaChevronDown, FaChevronUp, FaCopy, FaEnvelope, FaListUl, FaCheck, FaTimesCircle, FaSave } from 'react-icons/fa';
 
 const RECRUITER_ASSISTANT_OFFLINE = import.meta.env.VITE_RECRUITER_ASSISTANT_OFFLINE === 'true';
 
@@ -147,6 +147,9 @@ const RecruiterJobs = () => {
   const [copilotError, setCopilotError] = useState('');
   const [agentTrace, setAgentTrace] = useState([]);
   const [traceExpanded, setTraceExpanded] = useState(false);
+  const [currentTraceId, setCurrentTraceId] = useState(null);
+  // candidateApprovals: { [candidateId]: { action: 'approve'|'edit'|'reject', loading: bool, error: string } }
+  const [candidateApprovals, setCandidateApprovals] = useState({});
 
   const applicantsForModal = useMemo(() => {
     if (!applicantsModalJob) return [];
@@ -231,6 +234,8 @@ const RecruiterJobs = () => {
     setCopilotError('');
     setAgentTrace([]);
     setTraceExpanded(false);
+    setCurrentTraceId(null);
+    setCandidateApprovals({});
 
     const pool = getEffectiveApplicants(job, applicantsByJobId);
     const fromApi = (applicantsByJobId[String(job.id)] ?? []).length;
@@ -295,6 +300,7 @@ const RecruiterJobs = () => {
       if (!traceId) {
         throw new Error('Recruiter assistant did not return a trace_id.');
       }
+      setCurrentTraceId(traceId);
       setCopilotLog((prev) => [...prev, `Task queued (${String(traceId).slice(0, 8)}…). Scoring resumes…`]);
 
       const result = await pollRecruiterResult(
@@ -347,6 +353,33 @@ const RecruiterJobs = () => {
     setExpandedCandidateId(null);
     setEditedEmails({});
     setCopilotError('');
+    setCurrentTraceId(null);
+    setCandidateApprovals({});
+  };
+
+  const handleApprovalAction = async (action, candidateId, editedDraft) => {
+    if (!currentTraceId) return;
+    setCandidateApprovals((prev) => ({
+      ...prev,
+      [candidateId]: { action, loading: true, error: '' },
+    }));
+    try {
+      await recruiterApi.recruiterAssistant.approve(currentTraceId, {
+        action,
+        candidate_id: candidateId,
+        edited_draft: action === 'edit' ? (editedDraft ?? '') : null,
+      });
+      setCandidateApprovals((prev) => ({
+        ...prev,
+        [candidateId]: { action, loading: false, error: '' },
+      }));
+    } catch (err) {
+      const msg = err?.message || String(err);
+      setCandidateApprovals((prev) => ({
+        ...prev,
+        [candidateId]: { action: null, loading: false, error: msg },
+      }));
+    }
   };
 
   const STATUS_COLORS = { verified: '#004182', needs_review: '#c37d16', flagged: '#cc0000' };
@@ -659,6 +692,7 @@ const RecruiterJobs = () => {
                 {matchedCandidates.map((c) => {
                   const isExpanded = expandedCandidateId === c.candidateId;
                   const emailText = editedEmails[c.candidateId] ?? c.emailDraft;
+                  const approval = candidateApprovals[c.candidateId] ?? null;
                   return (
                     <div key={c.candidateId} style={{ backgroundColor: '#fff', border: '1px solid #e0e0df', borderRadius: '8px', padding: '12px', transition: 'box-shadow 0.15s', boxShadow: isExpanded ? '0 2px 8px rgba(0,0,0,0.1)' : 'none' }}>
                       {/* Header: avatar, name, score */}
@@ -710,19 +744,83 @@ const RecruiterJobs = () => {
                             onChange={(e) => setEditedEmails(prev => ({ ...prev, [c.candidateId]: e.target.value }))}
                             style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '12px', fontFamily: 'inherit', lineHeight: '1.5', maxHeight: '140px', minHeight: '100px', resize: 'vertical', boxSizing: 'border-box' }}
                           />
-                          <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
                             <button
                               onClick={() => navigator.clipboard?.writeText(emailText)}
                               style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#666', background: '#f3f2ef', border: '1px solid #e0e0df', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer' }}
                             >
                               <FaCopy size={10} /> Copy
                             </button>
-                            <button
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#fff', background: '#004182', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', marginLeft: 'auto' }}
-                            >
-                              <FaPaperPlane size={10} /> Send
-                            </button>
+                            {currentTraceId && approval?.action !== 'edit' && (
+                              <button
+                                onClick={() => handleApprovalAction('edit', c.candidateId, emailText)}
+                                disabled={approval?.loading}
+                                style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#fff', background: '#c37d16', border: 'none', borderRadius: '4px', padding: '4px 10px', cursor: approval?.loading ? 'wait' : 'pointer', marginLeft: 'auto' }}
+                              >
+                                {approval?.loading ? <FaSpinner style={{ animation: 'spin 1s linear infinite' }} /> : <FaSave size={10} />}
+                                Save Edit
+                              </button>
+                            )}
                           </div>
+                        </div>
+                      )}
+
+                      {/* ── Approval action panel ─────────────────────────────── */}
+                      {currentTraceId && (
+                        <div style={{ marginTop: '10px', borderTop: '1px solid #f0f0f0', paddingTop: '8px' }}>
+                          {approval?.action ? (
+                            /* Already actioned — show badge */
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '5px',
+                                padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700,
+                                background: approval.action === 'approve' ? '#e6f4ea'
+                                  : approval.action === 'reject' ? '#fce8e8' : '#fff3cd',
+                                color: approval.action === 'approve' ? '#1e7e34'
+                                  : approval.action === 'reject' ? '#cc0000' : '#856404',
+                              }}>
+                                {approval.action === 'approve' && <><FaCheck size={10} /> Approved</>}
+                                {approval.action === 'edit'    && <><FaSave size={10} /> Edit Saved</>}
+                                {approval.action === 'reject'  && <><FaTimesCircle size={10} /> Rejected</>}
+                              </span>
+                              <button
+                                onClick={() => setCandidateApprovals((prev) => { const n = {...prev}; delete n[c.candidateId]; return n; })}
+                                style={{ fontSize: '11px', color: '#0A66C2', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                              >
+                                Undo
+                              </button>
+                            </div>
+                          ) : (
+                            /* Action buttons */
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <span style={{ fontSize: '11px', color: '#666', fontWeight: 600, marginRight: '2px' }}>Draft decision:</span>
+                              <button
+                                onClick={() => handleApprovalAction('approve', c.candidateId)}
+                                disabled={approval?.loading}
+                                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '12px', border: '1.5px solid #1e7e34', background: 'none', color: '#1e7e34', fontSize: '12px', fontWeight: 700, cursor: approval?.loading ? 'wait' : 'pointer' }}
+                              >
+                                {approval?.loading ? <FaSpinner style={{ animation: 'spin 1s linear infinite' }} size={10} /> : <FaCheck size={10} />}
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => { setExpandedCandidateId(c.candidateId); }}
+                                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '12px', border: '1.5px solid #856404', background: 'none', color: '#856404', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                <FaEdit size={10} /> Edit Draft
+                              </button>
+                              <button
+                                onClick={() => handleApprovalAction('reject', c.candidateId)}
+                                disabled={approval?.loading}
+                                style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '12px', border: '1.5px solid #cc0000', background: 'none', color: '#cc0000', fontSize: '12px', fontWeight: 700, cursor: approval?.loading ? 'wait' : 'pointer' }}
+                              >
+                                {approval?.loading ? <FaSpinner style={{ animation: 'spin 1s linear infinite' }} size={10} /> : <FaTimesCircle size={10} />}
+                                Reject
+                              </button>
+                              {approval?.error && (
+                                <span style={{ fontSize: '11px', color: '#cc0000', marginLeft: '4px' }}>{approval.error}</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 

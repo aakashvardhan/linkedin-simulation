@@ -94,6 +94,9 @@ function mapBackendJobRow(raw, idx) {
     ? rawSkills
     : (() => { try { return JSON.parse(rawSkills); } catch { return String(rawSkills).split(',').map(s => s.trim()).filter(Boolean); } })();
 
+  const salary_min = raw?.salary_min != null ? Number(raw.salary_min) : null;
+  const salary_max = raw?.salary_max != null ? Number(raw.salary_max) : null;
+
   return {
     id,
     title,
@@ -106,6 +109,8 @@ function mapBackendJobRow(raw, idx) {
     applicants,
     hasApplied,
     skills_required: skillsRequired,
+    salary_min,
+    salary_max,
   };
 }
 
@@ -1500,11 +1505,22 @@ export const MockDataProvider = ({ children }) => {
     const id = typeof jobId === 'number' ? jobId : Number(jobId);
     setSavedJobIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const isSaving = !next.has(id);
+      if (isSaving) {
+        next.add(id);
+        // Publish job.saved event to Kafka via backend (members only)
+        if (BACKEND_INTEGRATION && userRole === 'MEMBER') {
+          const memberId = Number(memberKey);
+          if (!Number.isNaN(memberId)) {
+            api.jobs.save({ job_id: id, member_id: memberId }).catch(() => {/* ignore duplicate saves */});
+          }
+        }
+      } else {
+        next.delete(id);
+      }
       return next;
     });
-  }, []);
+  }, [api, memberKey, userRole]);
 
   const isJobSaved = useCallback(
     (jobId) => savedJobIds.has(typeof jobId === 'number' ? jobId : Number(jobId)),

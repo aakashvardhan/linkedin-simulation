@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   FaUserPlus, FaHandshake, FaEye, FaFileAlt,
   FaThumbsUp, FaComment, FaBriefcase, FaBell,
+  FaCheckCircle, FaTimesCircle, FaHourglassHalf, FaStar,
 } from 'react-icons/fa';
 import { useMockData } from '../context/MockDataContext';
 import RightSidebar from '../components/RightSidebar';
@@ -15,6 +16,30 @@ const STATUS_COLORS = {
   offer:     '#057642',
   rejected:  '#cc0000',
   other:     '#666666',
+};
+
+const STATUS_ICONS = {
+  reviewing: FaHourglassHalf,
+  interview: FaCheckCircle,
+  offer:     FaStar,
+  rejected:  FaTimesCircle,
+  other:     FaFileAlt,
+};
+
+const STATUS_LABELS = {
+  submitted: 'Submitted',
+  reviewing: 'Under Review',
+  interview: 'Interview',
+  offer:     'Offer Extended',
+  rejected:  'Not Selected',
+};
+
+const STATUS_MESSAGES = {
+  reviewing: 'is being reviewed by the hiring team',
+  interview: 'has advanced to the interview stage 🎉',
+  offer:     'has received an offer — congratulations! 🎊',
+  rejected:  'was not selected for this position',
+  other:     'has been updated',
 };
 
 function timeAgoLabel(iso) {
@@ -34,11 +59,12 @@ const Notifications = () => {
     userRole, userProfile,
     incomingInvites, connections,
     posts, jobs, applicantsByJobId,
-    getMemberAnalytics,
+    getMemberAnalytics, api,
   } = useMockData();
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [analyticsData, setAnalyticsData] = useState(null);
+  const [myApplications, setMyApplications] = useState([]);
 
   const isMember = userRole === 'MEMBER';
 
@@ -47,8 +73,15 @@ const Notifications = () => {
       getMemberAnalytics({ member_id: userProfile.member_id })
         .then(setAnalyticsData)
         .catch(() => {});
+
+      // Fetch all applications for this member to generate per-job status notifications
+      api.applications.byMember({ member_id: userProfile.member_id, page: 1, page_size: 100 })
+        .then((data) => {
+          setMyApplications(Array.isArray(data?.applications) ? data.applications : []);
+        })
+        .catch(() => {});
     }
-  }, [isMember, userProfile?.member_id, getMemberAnalytics]);
+  }, [isMember, userProfile?.member_id, getMemberAnalytics, api]);
 
   const notifications = useMemo(() => {
     const items = [];
@@ -114,24 +147,49 @@ const Notifications = () => {
       }
     }
 
-    // ── 4. Application status breakdown (member only) ─────────────────────────
-    if (isMember && analyticsData?.applicationStatusBreakdown?.length > 0) {
-      analyticsData.applicationStatusBreakdown.forEach((s) => {
+    // ── 4. Per-application status change notifications (member only) ──────────
+    if (isMember && myApplications.length > 0) {
+      // Show a notification for every application whose status was changed by the recruiter
+      const updatedApps = myApplications.filter(
+        (app) => app.status && app.status !== 'submitted',
+      );
+
+      updatedApps.forEach((app) => {
+        const statusKey = (app.status || 'other').toLowerCase();
+        const color = STATUS_COLORS[statusKey] || STATUS_COLORS.other;
+        const IconComp = STATUS_ICONS[statusKey] || FaFileAlt;
+        const labelText = STATUS_LABELS[statusKey] || app.status;
+        const actionText = STATUS_MESSAGES[statusKey] || 'has been updated';
+
+        // Try to find the matching job in context (jobs array loaded for members)
+        const job = jobs.find(
+          (j) => String(j.id) === String(app.job_id) || String(j.job_id) === String(app.job_id),
+        );
+        const jobTitle = job?.title || `Job #${app.job_id}`;
+        const company = job?.company || '';
+
+        // Consider "unread" if updated within last 3 days (or offer/interview always unread)
+        const updatedAt = app.updated_at ? new Date(app.updated_at) : null;
+        const daysSince = updatedAt ? (Date.now() - updatedAt.getTime()) / 86400000 : 999;
+        const isUnread = daysSince < 3 || statusKey === 'offer' || statusKey === 'interview';
+
         items.push({
-          id:        `app-status-${s.name}`,
-          icon:      FaFileAlt,
-          iconColor: STATUS_COLORS[s.name.toLowerCase()] || '#c37d16',
+          id:        `app-update-${app.application_id}`,
+          icon:      IconComp,
+          iconColor: color,
           message:   (
-            <>
-              You have <strong>{s.value}</strong> application
-              {s.value !== 1 ? 's' : ''} with status{' '}
-              <strong style={{ color: STATUS_COLORS[s.name.toLowerCase()] || '#c37d16' }}>
-                {s.name}
-              </strong>.
-            </>
+            <span>
+              Your application for{' '}
+              <strong>{jobTitle}</strong>
+              {company ? ` at ${company}` : ''}{' '}
+              {actionText}.{' '}
+              <strong style={{ color, padding: '1px 8px', borderRadius: '10px', background: `${color}18`, fontSize: '12px' }}>
+                {labelText}
+              </strong>
+            </span>
           ),
-          timeAgo: 'Recently',
-          unread:  false,
+          timeAgo: updatedAt ? timeAgoLabel(app.updated_at) : 'Recently',
+          unread:  isUnread,
           filter:  'Jobs',
         });
       });
@@ -221,6 +279,7 @@ const Notifications = () => {
   }, [
     incomingInvites, connections, isMember, analyticsData,
     posts, userProfile?.email, userRole, applicantsByJobId, jobs,
+    myApplications,
   ]);
 
   const filtered = activeFilter === 'All'

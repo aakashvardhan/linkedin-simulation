@@ -34,6 +34,7 @@ const Jobs = () => {
   const [locationFilter, setLocationFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
+  const [salaryFilter, setSalaryFilter] = useState('');
 
   // Client-side resume match: parse skills from pasted resume and rank jobs.
   const [resumeMatchText, setResumeMatchText] = useState('');
@@ -61,8 +62,18 @@ const Jobs = () => {
     return `${name}\n${headline}\n\nExperience: Summarize roles and impact (edit in Profile).\nSkills: List key technologies and domains.\nEducation: Degree, institution, year.\n\nFill in from your profile or paste a full resume below.`;
   };
 
+  const SALARY_RANGES = {
+    '': [0, Infinity],
+    '0-60000': [0, 60000],
+    '60000-100000': [60000, 100000],
+    '100000-150000': [100000, 150000],
+    '150000-200000': [150000, 200000],
+    '200000+': [200000, Infinity],
+  };
+
   const filteredJobs = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
+    const [salMin, salMax] = SALARY_RANGES[salaryFilter] ?? [0, Infinity];
     return jobs.filter((job) => {
       const industry = (job.industry || '').toLowerCase();
       const desc = (job.description || '').toLowerCase();
@@ -74,9 +85,14 @@ const Jobs = () => {
         ? (job.industry || '').toLowerCase() === industryFilter.toLowerCase()
         : true;
       const matchesRemote = isRemoteOnly ? job.remote === true : true;
-      return matchesSearch && matchesLocation && matchesType && matchesIndustry && matchesRemote;
+      const matchesSalary = salaryFilter === ''
+        ? true
+        : job.salary_min != null
+          ? job.salary_min <= salMax && (job.salary_max ?? job.salary_min) >= salMin
+          : true; // show jobs with no salary if no filter active
+      return matchesSearch && matchesLocation && matchesType && matchesIndustry && matchesRemote && matchesSalary;
     });
-  }, [jobs, searchTerm, locationFilter, typeFilter, industryFilter, isRemoteOnly]);
+  }, [jobs, searchTerm, locationFilter, typeFilter, industryFilter, isRemoteOnly, salaryFilter]);
 
   const industries = useMemo(() => {
     const s = new Set();
@@ -276,6 +292,15 @@ const Jobs = () => {
                {ind}
              </option>
            ))}
+         </select>
+         <select value={salaryFilter} onChange={(e) => setSalaryFilter(e.target.value)}
+           style={{ padding: '10px 12px', border: '1px solid #e0e0df', borderRadius: '4px', backgroundColor: 'transparent', color: '#666', fontSize: '14px', outline: 'none' }}>
+           <option value="">Salary (Any)</option>
+           <option value="0-60000">Under $60K</option>
+           <option value="60000-100000">$60K – $100K</option>
+           <option value="100000-150000">$100K – $150K</option>
+           <option value="150000-200000">$150K – $200K</option>
+           <option value="200000+">$200K+</option>
          </select>
          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#000000e6', cursor: 'pointer' }}>
            <input type="checkbox" checked={isRemoteOnly} onChange={(e) => setIsRemoteOnly(e.target.checked)} />
@@ -624,6 +649,15 @@ const Jobs = () => {
                                 {job.industry ? (
                                   <p style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>{job.industry}</p>
                                 ) : null}
+                                {(job.salary_min != null || job.salary_max != null) && (
+                                  <p style={{ fontSize: '12px', color: '#057642', fontWeight: '600', marginTop: '2px' }}>
+                                    {job.salary_min != null && job.salary_max != null
+                                      ? `$${(job.salary_min/1000).toFixed(0)}K – $${(job.salary_max/1000).toFixed(0)}K/yr`
+                                      : job.salary_min != null
+                                        ? `From $${(job.salary_min/1000).toFixed(0)}K/yr`
+                                        : `Up to $${(job.salary_max/1000).toFixed(0)}K/yr`}
+                                  </p>
+                                )}
                                 {job.hasApplied && <p style={{ fontSize: '12px', color: '#0A66C2', fontWeight: '600', marginTop: '4px' }}><FaCheckCircle size={10}/> Applied</p>}
                              </div>
                           </div>
@@ -672,6 +706,15 @@ const Jobs = () => {
                                   · Posted {1 + (Number(selectedJob.id) % 21)} days ago
                                 </span>
                               </p>
+                              {(selectedJob.salary_min != null || selectedJob.salary_max != null) && (
+                                <p style={{ fontSize: '14px', color: '#057642', fontWeight: '600', margin: '6px 0 0' }}>
+                                  💰 {selectedJob.salary_min != null && selectedJob.salary_max != null
+                                    ? `$${selectedJob.salary_min.toLocaleString()} – $${selectedJob.salary_max.toLocaleString()} / yr`
+                                    : selectedJob.salary_min != null
+                                      ? `From $${selectedJob.salary_min.toLocaleString()} / yr`
+                                      : `Up to $${selectedJob.salary_max.toLocaleString()} / yr`}
+                                </p>
+                              )}
                               <p style={{ fontSize: '12px', color: '#666666', margin: '6px 0 0' }}>
                                 Promoted · Easy Apply
                               </p>

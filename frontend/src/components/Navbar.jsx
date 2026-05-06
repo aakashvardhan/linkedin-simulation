@@ -6,7 +6,7 @@ import {
   recruiterProfilePhotoKey,
   PROFILE_PHOTO_UPDATED,
 } from '../context/MockDataContext';
-import { FaSearch, FaHome, FaUserFriends, FaBriefcase, FaBell, FaChartBar, FaClipboardList } from 'react-icons/fa';
+import { FaSearch, FaHome, FaUserFriends, FaBriefcase, FaBell, FaChartBar, FaClipboardList, FaUserTie } from 'react-icons/fa';
 import { BrandMark } from './BrandMark';
 import { AiFillMessage } from 'react-icons/ai';
 import { CgProfile } from 'react-icons/cg';
@@ -184,6 +184,12 @@ const Navbar = () => {
                   <NavLink to="/recruiter/jobs" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
                     <FaClipboardList size={24} />
                     <span>Manage Jobs</span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/recruiter/talent" className={({ isActive }) => (isActive ? 'nav-item active' : 'nav-item')}>
+                    <FaUserTie size={24} />
+                    <span>Talent Search</span>
                   </NavLink>
                 </li>
                 <li>

@@ -16,6 +16,7 @@ const RecruiterJobs = lazy(() => import('./pages/RecruiterJobs'));
 const RecruiterProfile = lazy(() => import('./pages/RecruiterProfile'));
 const MemberProfile = lazy(() => import('./pages/MemberProfile'));
 const RecruiterPublicProfile = lazy(() => import('./pages/RecruiterPublicProfile'));
+const TalentSearch = lazy(() => import('./pages/TalentSearch'));
 
 function RouteFallback() {
   return (
@@ -42,6 +43,7 @@ function AuthenticatedRoutes() {
           <Route path="/recruiter/dashboard" element={<RecruiterDashboard />} />
           <Route path="/recruiter/jobs" element={<RecruiterJobs />} />
           <Route path="/recruiter/profile" element={<RecruiterProfile />} />
+          <Route path="/recruiter/talent" element={<TalentSearch />} />
           <Route path="/network" element={<Network />} />
           <Route path="/messaging" element={<Messaging />} />
           <Route path="/in/:memberId" element={<MemberProfile />} />

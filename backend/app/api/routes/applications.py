@@ -79,6 +79,7 @@ def _application_row(app: Application, member: Member | None) -> dict:
         'cover_letter': app.cover_letter,
         'status': app.status,
         'application_datetime': app.application_datetime,
+        'updated_at': app.updated_at,
         'recruiter_notes': app.recruiter_notes,
     }
 

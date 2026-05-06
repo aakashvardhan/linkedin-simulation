@@ -56,6 +56,7 @@ export function makeApi({ getAuthToken } = {}) {
       get: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/get', payload)),
       update: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/update', payload)),
       search: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/search', payload)),
+      save: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/save', payload)),
       close: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/close', payload)),
       byRecruiter: async (payload) => unwrapSuccessEnvelope(await api.post('/jobs/byRecruiter', payload)),
     },
@@ -109,6 +110,8 @@ export function makeApi({ getAuthToken } = {}) {
         recruiterAssistantClient.get(`/result/${encodeURIComponent(traceId)}`, { timeoutMs: 120000 }),
       status: (traceId) =>
         recruiterAssistantClient.get(`/status/${encodeURIComponent(traceId)}`, { timeoutMs: 30000 }),
+      approve: (traceId, payload) =>
+        recruiterAssistantClient.post(`/approve/${encodeURIComponent(traceId)}`, payload, { timeoutMs: 30000 }),
     },
   };
 }
