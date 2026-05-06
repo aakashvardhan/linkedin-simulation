@@ -1,0 +1,37 @@
+# analytics-service — M6
+# Owned by: Pair 3 (M5/M6)
+# Included by root docker-compose.yml via include:
+# Infra (mongo, kafka) is defined in root; referenced as external here.
+# On startup this service creates all 9 Kafka topics via kafkaAdmin.js.
+
+services:
+  analytics-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analytics-service
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      # MongoDB
+      MONGO_URI: mongodb://mongo:27017/linkedin_simulation
+      # Kafka
+      KAFKA_BROKER: kafka:9092
+      KAFKA_CLIENT_ID: analytics-service
+      KAFKA_GROUP_ID: analytics-consumer-group
+      # Service
+      PORT: "8006"
+    ports:
+      - "8006:8006"
+    networks:
+      - linkedin-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s

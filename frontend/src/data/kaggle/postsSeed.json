@@ -1,0 +1,46 @@
+[
+  {
+    "id": 101,
+    "author": "Morgan Lee",
+    "headline": "Data Science Lead @ Helix Biotech",
+    "time": "1h",
+    "content": "We just open-sourced our feature-store utilities for batch + streaming pipelines. If you’re building ML platforms on Kaggle-style workflows, feedback welcome — link in comments.",
+    "likes": 256,
+    "comments": 31,
+    "image": null,
+    "ownerEmail": null
+  },
+  {
+    "id": 102,
+    "author": "Priya Nair",
+    "headline": "Hiring Manager | ML & Analytics",
+    "time": "3h",
+    "content": "Tip for candidates: when sharing projects from public datasets (e.g. job-posting CSVs on Kaggle), spell out **your** feature engineering and validation — not just the leaderboard score.",
+    "likes": 189,
+    "comments": 17,
+    "image": null,
+    "ownerEmail": null
+  },
+  {
+    "id": 103,
+    "author": "Diego Alvarez",
+    "headline": "Staff Engineer @ StreamPay",
+    "time": "6h",
+    "content": "Shipped our first Kafka-backed job-ingestion service today. Next: idempotent consumers + DLQ dashboards for recruiter analytics. Distributed systems class finally meets production.",
+    "likes": 94,
+    "comments": 12,
+    "image": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=600&h=400&fit=crop",
+    "ownerEmail": null
+  },
+  {
+    "id": 104,
+    "author": "Samira Okonkwo",
+    "headline": "UX Research · Northwind Labs",
+    "time": "1d",
+    "content": "Running mixed-methods studies on how job seekers scan listings. Patterns echo what we see in large open job datasets: clarity on remote/hybrid beats buzzwords every time.",
+    "likes": 412,
+    "comments": 58,
+    "image": null,
+    "ownerEmail": null
+  }
+]

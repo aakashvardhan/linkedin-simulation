@@ -1,0 +1,123 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: ai_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: ai_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: ai_zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://ai_kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  mongodb:
+    image: mongo:7
+    container_name: ai_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai_redis
+    ports:
+      - "6379:6379"
+
+  ai-service:
+    build: .
+    container_name: ai_service
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - kafka
+      - mongodb
+      - redis
+      - resume-parser
+      - matcher
+      - ranking-explainer
+      - interview-questions
+      - outreach-drafter
+    environment:
+      KAFKA_BOOTSTRAP: ai_kafka:9092
+      MONGO_URI: mongodb://ai_mongo:27017
+      REDIS_URL: redis://ai_redis:6379
+      RESUME_PARSER_URL: http://resume-parser:8000
+      MATCHER_URL: http://matcher:8000
+      RANKING_EXPLAINER_URL: http://ranking-explainer:8000
+      INTERVIEW_QUESTIONS_URL: http://interview-questions:8000
+      OUTREACH_DRAFTER_URL: http://outreach-drafter:8000
+
+  resume-parser:
+    build: .
+    container_name: resume_parser
+    env_file:
+      - .env
+    command: ["uvicorn", "app.skill_services.resume_parser_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  matcher:
+    build: .
+    container_name: matcher
+    command: ["uvicorn", "app.skill_services.matcher_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+  ranking-explainer:
+    build: .
+    container_name: ranking_explainer
+    env_file:
+      - .env
+    command: ["uvicorn", "app.skill_services.ranking_explainer_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  interview-questions:
+    build: .
+    container_name: interview_questions
+    env_file:
+      - .env
+    command: ["uvicorn", "app.skill_services.interview_questions_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  outreach-drafter:
+    build: .
+    container_name: outreach_drafter
+    env_file:
+      - .env
+    command: ["uvicorn", "app.skill_services.outreach_drafter_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mongo_data:

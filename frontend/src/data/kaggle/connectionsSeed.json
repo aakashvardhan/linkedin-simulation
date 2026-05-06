@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "name": "Elena Vogel",
+    "headline": "Senior Recruiter · Summit Staffing",
+    "mutual": 18,
+    "status": "none"
+  },
+  {
+    "id": 2,
+    "name": "James Park",
+    "headline": "Applied Scientist · OpenMinds AI",
+    "mutual": 7,
+    "status": "none"
+  },
+  {
+    "id": 3,
+    "name": "Amira Hassan",
+    "headline": "Backend Engineer · StreamPay",
+    "mutual": 24,
+    "status": "none"
+  },
+  {
+    "id": 4,
+    "name": "Chris O’Brien",
+    "headline": "TPM · Orbit Systems",
+    "mutual": 5,
+    "status": "none"
+  },
+  {
+    "id": 5,
+    "name": "Yuki Tanaka",
+    "headline": "Product Designer · Pixel Harbor",
+    "mutual": 11,
+    "status": "none"
+  },
+  {
+    "id": 6,
+    "name": "Fatima El-Sayed",
+    "headline": "Data Analyst · Retail Insights Co.",
+    "mutual": 33,
+    "status": "none"
+  }
+]
