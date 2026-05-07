@@ -26,8 +26,7 @@ A 3-tier, distributed LinkedIn-style hiring platform with **Kafka-orchestrated**
 13. [Analytics Dashboards (Required Graphs)](#13-analytics-dashboards-required-graphs)
 14. [Local & Docker Deployment](#14-local--docker-deployment)
 15. [Testing](#15-testing)
-16. [Mapping to Grading Rubric](#16-mapping-to-grading-rubric)
-17. [Observations & Lessons Learned](#17-observations--lessons-learned)
+16. [Observations & Lessons Learned](#16-observations--lessons-learned)
 
 ---
 
