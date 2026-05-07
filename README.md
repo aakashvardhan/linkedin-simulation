@@ -703,23 +703,10 @@ docker exec ai_service python -m app.tools.e2e_smoke
 | **Full-stack integration** | `integration_test.py` (gateway → backend → app/msg/analytics → AI; verifies Kafka events landing in Mongo + Redis cache hits) | `python integration_test.py` |
 | **API smoke (bash)** | `simple_integration_test.sh`, `startup_validator.sh`, `scripts/test_analytics.sh` | direct shell |
 
----
-
-## 16. Mapping to Grading Rubric
-
-| Weight | Requirement | Where it's satisfied |
-|---|---|---|
-| **40 % Basic operation** | All required endpoints implemented (Profile/Job/Connection/Application/Messaging/Analytics) with correct semantics, RBAC, pagination, and error envelopes | §5; `backend/app/api/routes/*` + `services/{application,messaging,analytics}-service/` |
-| **10 % Scalability + Redis caching** | 10K dataset auto-loaded; cache-aside on 5 hot read paths with measured impact (~8 % latency reduction on the read benchmark; +45 % throughput on the multi-replica deployment) | §10–§12; `charts/`, `generate_chart.py`, `jmeter/` |
-| **10 % Distributed services** | Compose deploys 17 services across MySQL + MongoDB + Redis + Kafka + 4 application backends + 6 AI microservices behind an Nginx gateway; deployable to AWS ECS via Dockerfiles | §3, §14; `docker-compose.yml`, `nginx/nginx.api-gateway.conf` |
-| **15 % Agentic AI (FastAPI)** | Multi-step Kafka workflow with Supervisor + 5 skills, WebSocket progress, per-candidate human-in-the-loop approval, two evaluation metrics (match quality + approval rate), failure isolation, idempotency | §7; `services/recruiter-assistant/app/agents/` + `app/api/` + `app/kafka/` |
-| **10 % Analysis report (tracking)** | Standard event envelope, dedicated `events` Mongo collection with 4 compound indexes, `/analytics/*` endpoints + Recharts dashboards | §6, §13 |
-| **5 % Client GUI** | Modern React 19 SPA mirroring LinkedIn UX (member + recruiter modes), Recharts dashboards, AI Copilot side panel with WebSocket streaming | §8; `frontend/` |
-| **10 % Test class & write-up** | Vitest + pytest + e2e + this report | §15 + `README.md` |
 
 ---
 
-## 17. Observations & Lessons Learned
+## 16. Observations & Lessons Learned
 
 1. **Cache-aside beats clever invalidation.** The per-search MD5 cache key is conservative but trivial to reason about, and pattern invalidation on writes (`jobs:search:*`) avoided a class of staleness bugs we initially had with single-key invalidation.
 2. **`autoCommit:false` is the right default for ledger consumers.** Writing first, committing offsets second, and combining a Mongo unique index with an in-process pre-check gives at-least-once safety without writing dedupe code in every endpoint.
