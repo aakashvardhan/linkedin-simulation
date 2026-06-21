@@ -33,7 +33,7 @@ openai==2.31.0
 packaging==26.0
 pluggy==1.6.0
 pydantic==2.13.0
-pydantic-settings==2.13.1
+pydantic-settings==2.14.2
 pydantic_core==2.46.0
 Pygments==2.20.0
 pymongo==4.16.0
